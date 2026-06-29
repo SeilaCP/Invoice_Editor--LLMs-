@@ -249,6 +249,74 @@ export async function extractDocumentData(
     terms: z.string().optional(),
   });
 
+  const proposalSchema = z.object({
+    clientName: z.string(),
+    clientEmail: z.string(),
+    clientAddress: z.string(),
+
+    proposalNumber: z.string(),
+    proposalDate: z.string(),
+    validUntil: z.string(),
+
+    proposalTitle: z.string(),
+    introduction: z.string(),
+
+    objectives: z.array(z.string()),
+
+    scope: z.string(),
+
+    deliverables: z.array(z.string()),
+
+    timeline: z.string(),
+
+    cost: z.number(),
+
+    terms: z.string(),
+
+    notes: z.string(),
+
+    companyName: z.string(),
+    companyAddress: z.string(),
+  });
+
+  const quotationSchema = z.object({
+    clientName: z.string(),
+    clientEmail: z.string(),
+    clientAddress: z.string(),
+
+    quotationNumber: z.string(),
+    quotationDate: z.string(),
+    validUntil: z.string(),
+
+    items: z.array(
+      z.object({
+        description: z.string(),
+        quantity: z.number(),
+        unitPrice: z.number(),
+        amount: z.number(),
+      }),
+    ),
+
+    subtotal: z.number(),
+
+    tax: z.number(),
+
+    total: z.number(),
+
+    notes: z.string(),
+
+    companyName: z.string(),
+    companyAddress: z.string(),
+  });
+
+  const schemas = {
+    invoice: genericSchema,
+    quotation: quotationSchema,
+    proposal: proposalSchema,
+  } as const;
+
+  const genSchema = schemas[input.templateType];
+
   try {
     console.log("Start Detected", input);
     const result = await generateObject({
@@ -267,14 +335,14 @@ CRITICAL LENGTH RULE:
 If your response requires explaining a long concept or a massive amount of text, write ONLY the first 2-3 paragraphs or steps. 
 At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read more]".`,
       prompt: fullPrompt,
-      schema: genericSchema,
+      schema: genSchema,
     });
 
     let clearedPrompt = input.userPrompt;
     if (clearedPrompt.includes("[due date]")) {
       // Replace string placeholder with a real calculated default date string
       const defaultDate = new Date();
-      defaultDate.setDate(defaultDate.getDate() + 30); // default 30 days out
+      defaultDate.setDate(defaultDate.getDate() + 3); // default 30 days out
       const dateStr = defaultDate.toISOString().split("T")[0];
 
       clearedPrompt = clearedPrompt.replace(/\[due\s?date\]/gi, dateStr);
@@ -369,7 +437,6 @@ export async function detectTemplateType(
     return detectTemplateTypeHeuristic(userInput);
   }
 }
-
 
 // [!] Problem
 function detectTemplateTypeHeuristic(
