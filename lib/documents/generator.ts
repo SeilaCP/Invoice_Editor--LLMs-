@@ -22,12 +22,19 @@ interface GenerateDocumentOutput {
   error?: string;
 }
 
-Handlebars.registerHelper("inc", function (value: number) {
-  return value + 1;
-});
+import Handlebars from "handlebars";
+
+Handlebars.registerHelper("inc", (value: number) => value + 1);
+
+Handlebars.registerHelper(
+  "if_odd",
+  function (this: unknown, value: number, options: Handlebars.HelperOptions) {
+    return value % 2 !== 0 ? options.fn(this) : options.inverse(this);
+  },
+);
 
 // ─── Proposal HTML Template ────────────────────────────────────────────────────
-const PROPOSAL_HTML_TEMPLATE = `
+export const PROPOSAL_HTML_TEMPLATE = `
 <div style="font-family:'Georgia','Times New Roman',serif;background:#F5F0E8;color:#3D2B1F;max-width:800px;margin:auto;box-shadow:0 4px 20px rgba(61,43,31,0.08);">
   <!-- Document body -->
   <div style="padding:50px 50px 0 50px;">
