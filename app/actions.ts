@@ -1,6 +1,6 @@
 "use server";
 
-import { generateDocument } from "@/lib/documents/generator";
+import { generateDocument, generatePDF } from "@/lib/documents/generator";
 import { dbHelpers } from "@/lib/db/mock-db";
 import {
   getProvidersConfig,
@@ -280,4 +280,15 @@ export async function detectTemplateTypeAction(
       detectedType: "quotation" as const,
     };
   }
+}
+
+export async function generatePdfAction(
+  json: Record<string, any>,
+  templateType: string
+): Promise<string> {
+  const pdfBuffer = await generatePDF(json, templateType);
+  // Ensure it's base64-encoded for safe transport to the client
+  return Buffer.isBuffer(pdfBuffer)
+    ? pdfBuffer.toString("base64")
+    : Buffer.from(pdfBuffer).toString("base64");
 }

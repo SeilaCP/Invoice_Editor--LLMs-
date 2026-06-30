@@ -11,7 +11,7 @@ import {
   Bot,
   User,
 } from "lucide-react";
-import { handleUserMessage } from "@/app/actions";
+import { handleUserMessage, generatePdfAction } from "@/app/actions";
 
 interface Message {
   id: string;
@@ -113,16 +113,33 @@ export function ChatDashboard() {
 
     setIsLoading(false);
   };
+  const handleDownloadPdf = async (msg: Message) => {
+    if (!msg.json) return;
+    try {
+      const pdfBase64 = await generatePdfAction(
+        msg.json,
+        msg.templateType ?? "invoice",
+      );
 
-  const downloadFile = (
-    content: string,
-    fileName: string,
-    mimeType: string,
-  ) => {
-    const a = document.createElement("a");
-    a.href = `data:${mimeType};charset=utf-8,` + encodeURIComponent(content);
-    a.download = fileName;
-    a.click();
+      const byteChars = atob(pdfBase64);
+      const byteNumbers = new Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: "application/pdf" });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (msg.fileName || "document").replace(/\.html$/, "") + ".pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download PDF:", err);
+    }
   };
 
   const toggleJsonTab = (id: string) =>
@@ -235,7 +252,7 @@ export function ChatDashboard() {
                       >
                         Preview
                       </button>
-                      <button
+                      {/* <button
                         onClick={() => toggleJsonTab(msg.id)}
                         className={`px-4 py-2 text-xs font-medium transition-colors ${
                           jsonTabOpen[msg.id]
@@ -244,7 +261,7 @@ export function ChatDashboard() {
                         }`}
                       >
                         JSON
-                      </button>
+                      </button> */}
                     </div>
 
                     {/* Preview */}
@@ -267,18 +284,12 @@ export function ChatDashboard() {
                     {/* Download row */}
                     <div className="flex gap-2 px-4 py-3 border-t border-border bg-muted/20">
                       <button
-                        onClick={() =>
-                          downloadFile(
-                            msg.html!,
-                            msg.fileName || "document.html",
-                            "text/html",
-                          )
-                        }
+                        onClick={() => handleDownloadPdf(msg)}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-background border border-border rounded-lg hover:bg-muted transition-colors"
                       >
-                        <Download size={13} /> HTML
+                        <Download size={13} /> PDF
                       </button>
-                      {msg.json && (
+                      {/* {msg.json && (
                         <button
                           onClick={() =>
                             downloadFile(
@@ -294,7 +305,7 @@ export function ChatDashboard() {
                         >
                           <FileJson size={13} /> JSON
                         </button>
-                      )}
+                      )} */}
                     </div>
                   </div>
                 )}
