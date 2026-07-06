@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, RefreshCw, Download } from "lucide-react";
+import { Send, Bot, User, Download, RefreshCcw } from "lucide-react";
 import { findMatchingTemplates, fillTemplateFromText } from "@/app/actions";
 import type { TemplateMatch, FillTemplateResult } from "@/app/upload_action";
 import { downloadBase64File } from "@/lib/download";
+import { renderAsync } from "docx-preview";
 
 interface Message {
   id: string;
@@ -14,6 +15,49 @@ interface Message {
   matches?: TemplateMatch[];
   selectedTemplateId?: string;
   fillResult?: FillTemplateResult;
+}
+
+interface TemplateDocxGenerateProps {
+  selectedTemplate: TemplateMatch;
+  previewError: string | null;
+  previewUrl: string | null;
+  docxPreviewRef: React.RefObject<HTMLDivElement>;
+}
+
+function decodeBase64ToBlob(base64Data: string, mimeType: string) {
+  const byteCharacters = atob(base64Data);
+  const byteNumbers = new Array(byteCharacters.length);
+
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+
+  const byteArray = new Uint8Array(byteNumbers);
+  return new Blob([byteArray], { type: mimeType });
+}
+
+function getPreviewKind(filename: string) {
+  const lowerName = filename.toLowerCase();
+
+  if (lowerName.endsWith(".pdf")) {
+    return {
+      kind: "pdf" as const,
+      mimeType: "application/pdf",
+    };
+  }
+
+  if (lowerName.endsWith(".docx") || lowerName.endsWith(".doc")) {
+    return {
+      kind: "docx" as const,
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+  }
+
+  return {
+    kind: "unsupported" as const,
+    mimeType: "application/octet-stream",
+  };
 }
 
 export function TemplateChatDashboard() {
@@ -28,17 +72,72 @@ export function TemplateChatDashboard() {
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  // Once a template is selected from a search result, subsequent messages are
-  // treated as fill instructions for that template instead of new searches.
   const [selectedTemplate, setSelectedTemplate] =
     useState<TemplateMatch | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const docxPreviewRef = useRef<HTMLDivElement>(null);
+  const [printMsg, setPrintMsg] = useState(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    const container = docxPreviewRef.current;
+    setPreviewError(null);
+
+    if (container) {
+      container.innerHTML = "";
+    }
+
+    if (!selectedTemplate) {
+      setPreviewUrl(null);
+      return;
+    }
+
+    const latestFillResult = [...messages]
+      .reverse()
+      .find((m) => m.type === "fill" && m.fillResult)?.fillResult;
+
+    const previewFileName =
+      latestFillResult?.fileName ?? selectedTemplate.filename;
+    const previewBase64 =
+      latestFillResult?.fileBase64 ?? selectedTemplate.fileBase64;
+
+    const preview = getPreviewKind(previewFileName);
+
+    const blob = decodeBase64ToBlob(previewBase64, preview.mimeType);
+
+    if (preview.kind === "pdf") {
+      const nextUrl = URL.createObjectURL(blob);
+      setPreviewUrl(nextUrl);
+      return () => {
+        URL.revokeObjectURL(nextUrl);
+      };
+    }
+
+    setPreviewUrl(null);
+
+    if (preview.kind === "unsupported") {
+      setPreviewError("Preview is only available for PDF and Word documents.");
+      return;
+    }
+
+    if (!container) {
+      setPreviewError("Preview container is not available.");
+      return;
+    }
+
+    renderAsync(blob, container).catch((error) => {
+      console.error("Failed to render DOCX preview:", error);
+      setPreviewError(
+        "Unable to preview this Word document. You can still download it.",
+      );
+    });
+  }, [messages, selectedTemplate]);
 
   const handleSelectMatch = (messageId: string, templateId: string) => {
     setMessages((prev) =>
@@ -64,6 +163,8 @@ export function TemplateChatDashboard() {
 
   const handleNewSearch = () => {
     setSelectedTemplate(null);
+    setPreviewUrl(null);
+    setPreviewError(null);
     setMessages((prev) => [
       ...prev,
       {
@@ -129,7 +230,6 @@ export function TemplateChatDashboard() {
           ]);
         }
       } else {
-        // ── Fill mode ──
         const result = await fillTemplateFromText(
           selectedTemplate.templateId,
           text,
@@ -174,7 +274,6 @@ export function TemplateChatDashboard() {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      {/* ── Header ── */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-none">
         <div className="flex items-center gap-3">
           <img
@@ -193,20 +292,7 @@ export function TemplateChatDashboard() {
             )}
           </div>
         </div>
-        {/* <div className="flex items-center gap-2">
-          {selectedTemplate && (
-            <button
-              onClick={handleNewSearch}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border border-border text-foreground hover:bg-muted transition-colors"
-              title="Start a new search"
-            >
-              <RefreshCw size={14} /> New search
-            </button>
-          )}
-        </div> */}
       </div>
-
-      {/* ── Messages ── */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-5xl mx-auto space-y-6">
           {messages.map((msg) => (
@@ -221,10 +307,10 @@ export function TemplateChatDashboard() {
               )}
 
               <div
-                className={`flex flex-col gap-2 max-w-xl ${msg.role === "user" ? "items-end" : "items-start"}`}
+                className={`flex flex-col gap-2 ${msg.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
-                  className={`px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${
+                  className={`px-4 py-3 max-w-xl rounded-2xl text-sm whitespace-pre-wrap leading-relaxed ${
                     msg.role === "user"
                       ? "bg-primary text-primary-foreground rounded-br-none"
                       : msg.type === "fill" || msg.type === "search"
@@ -234,10 +320,8 @@ export function TemplateChatDashboard() {
                 >
                   <p>{msg.content}</p>
                 </div>
-
-                {/* Search results: select dropdown */}
                 {msg.type === "search" && msg.matches && (
-                  <div className="w-full min-w-[420px] bg-background border border-border rounded-xl p-4 shadow-sm">
+                  <div className="w-full min-w-[420px] bg-background border border-border rounded-xl p-4 shadow-sm sm:w">
                     <label
                       htmlFor={`match-select-${msg.id}`}
                       className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted-foreground"
@@ -252,14 +336,20 @@ export function TemplateChatDashboard() {
                       }
                       className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm text-foreground shadow-sm outline-none focus:border-primary"
                     >
-                      {msg.matches.map((match) => (
-                        <option key={match.templateId} value={match.templateId}>
-                          {match.filename} — {(match.score * 100).toFixed(1)}%
-                          match ({match.templateType},{" "}
-                          {match.placeholders.length} placeholder
-                          {match.placeholders.length === 1 ? "" : "s"})
-                        </option>
-                      ))}
+                      {msg.matches.map((match) => {
+                        if (match.score == 0) return null;
+                        return (
+                          <option
+                            key={match.templateId}
+                            value={match.templateId}
+                          >
+                            {match.filename} — {(match.score * 100).toFixed(1)}%
+                            match ({match.templateType},{" "}
+                            {match.placeholders.length} placeholder
+                            {match.placeholders.length === 1 ? "" : "s"})
+                          </option>
+                        );
+                      })}
                     </select>
 
                     <button
@@ -278,12 +368,21 @@ export function TemplateChatDashboard() {
                         ? "Selected"
                         : "Use this template"}
                     </button>
+
+                    {selectedTemplate && (
+                      <TemplateDocxGenerate
+                        selectedTemplate={selectedTemplate}
+                        previewError={previewError}
+                        previewUrl={previewUrl}
+                        docxPreviewRef={docxPreviewRef}
+                      />
+                    )}
                   </div>
                 )}
 
-                {/* Fill results: extracted fields + download */}
+                {/* Filldisplay */}
                 {msg.type === "fill" && msg.fillResult && (
-                  <div className="w-full min-w-[420px] bg-background border border-border rounded-xl overflow-hidden shadow-sm">
+                  <div className="w-full min-w-[420px] bg-background border border-border rounded-xl overflow-hidden shadow-sm sm:w-full">
                     <div className="p-4 space-y-1">
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
                         Extracted fields
@@ -316,6 +415,15 @@ export function TemplateChatDashboard() {
                         </div>
                       )}
                     </div>
+
+                    {selectedTemplate && (
+                      <TemplateDocxGenerate
+                        selectedTemplate={selectedTemplate}
+                        previewError={previewError}
+                        previewUrl={previewUrl}
+                        docxPreviewRef={docxPreviewRef}
+                      />
+                    )}
 
                     <div className="flex gap-2 px-4 py-3 border-t border-border bg-muted/20">
                       <button
@@ -362,12 +470,10 @@ export function TemplateChatDashboard() {
         </div>
       </div>
 
-      {/* ── Input ── */}
       <div className="border-t border-border px-4 py-4 bg-background">
         <div className="max-w-2xl mx-auto">
           <div className="flex gap-3 items-end">
             <textarea
-              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -400,6 +506,18 @@ export function TemplateChatDashboard() {
                 <Send size={18} />
               </button>
             )}
+
+            <div className="flex items-center gap-2">
+              {selectedTemplate && (
+                <button
+                  onClick={handleNewSearch}
+                  className="w-11 h-11 flex items-center justify-center rounded-xl bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-all"
+                  title="Start a new search"
+                >
+                  <RefreshCcw size={14} />
+                </button>
+              )}
+            </div>
           </div>
           <p className="text-xs text-muted-foreground mt-2 px-1">
             Shift+Enter for new line ·{" "}
@@ -410,5 +528,42 @@ export function TemplateChatDashboard() {
         </div>
       </div>
     </div>
+  );
+}
+
+export function TemplateDocxGenerate({
+  selectedTemplate,
+  previewError,
+  previewUrl,
+  docxPreviewRef,
+}: TemplateDocxGenerateProps) {
+  return (
+    <>
+      <div className="h-[500px] overflow-y-scroll rounded-xl border border-border bg-muted/10">
+        <div className="border-b border-border px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Template preview
+          </p>
+          <p className="mt-1 text-sm text-foreground">
+            {selectedTemplate.filename}
+          </p>
+        </div>
+
+        {previewError ? (
+          <div className="px-4 py-6 text-sm text-amber-700">{previewError}</div>
+        ) : previewUrl ? (
+          <iframe
+            src={previewUrl}
+            title={`Preview of ${selectedTemplate.filename}`}
+            className="h-[500px] w-full border-0 bg-white "
+          />
+        ) : (
+          <div
+            ref={docxPreviewRef}
+            className="min-h-[500px] overflow-auto bg-white p-6"
+          />
+        )}
+      </div>
+    </>
   );
 }

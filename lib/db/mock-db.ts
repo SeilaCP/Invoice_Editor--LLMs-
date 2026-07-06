@@ -38,6 +38,46 @@ function normalizeMongoRecord<T>(record: T): T {
   return JSON.parse(JSON.stringify(record));
 }
 
+function normalizeEmbeddingVector(value: unknown): number[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
+
+  if (typeof value[0] === "number") {
+    return (value as number[]).filter((item) => Number.isFinite(item));
+  }
+
+  if (Array.isArray(value[0])) {
+    const nested = value[0] as unknown[];
+    return nested
+      .filter((item): item is number => typeof item === "number")
+      .filter((item) => Number.isFinite(item));
+  }
+
+  return [];
+}
+
+function tokenizeSearchText(value: string): string[] {
+  return (value.toLowerCase().match(/[a-z0-9]+/g) || []).filter(
+    (token) => token.length >= 3,
+  );
+}
+
+function lexicalSimilarityScore(
+  queryText: string,
+  candidateText: string,
+): number {
+  const queryTokens = new Set(tokenizeSearchText(queryText));
+  const candidateTokens = new Set(tokenizeSearchText(candidateText));
+
+  if (!queryTokens.size || !candidateTokens.size) return 0;
+
+  let overlapCount = 0;
+  for (const token of queryTokens) {
+    if (candidateTokens.has(token)) overlapCount += 1;
+  }
+
+  return overlapCount / Math.sqrt(queryTokens.size * candidateTokens.size);
+}
+
 function buildFallbackEmbedding(text: string, dimensions = 256) {
   const embedding = new Array<number>(dimensions).fill(0);
   const tokens = text.toLowerCase().match(/[a-z0-9]+/g) || [];
@@ -61,22 +101,33 @@ function buildFallbackEmbedding(text: string, dimensions = 256) {
 export async function buildEmbedding(
   text: string,
   taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" = "RETRIEVAL_DOCUMENT",
-) {
+): Promise<number[]> {
   const normalizedText = text.trim();
   if (!normalizedText) return [] as number[];
 
   try {
-    const result = await embed({
-      model: getEmbeddingModel(),
-      value: normalizedText.slice(0, 8000),
-      providerOptions: {
-        google: {
-          taskType,
-        },
-      },
+    const result = await ollama.embed({
+      model: "nomic-embed-text:v1.5",
+      input: normalizedText.slice(0, 8000),
     });
+    // const result = await embed({
+    //   model: getEmbeddingModel(),
+    //   value: normalizedText.slice(0, 8000),
+    //   providerOptions: {
+    //     google: {
+    //       taskType,
+    //     },
+    //   },
+    // });
 
-    return result.embedding;
+    const embedding = normalizeEmbeddingVector(result.embeddings);
+
+    if (!embedding.length) {
+      throw new Error("Ollama embedding response did not include a vector");
+    }
+
+    console.log(`[v0] Embedding generated with ${embedding.length} dimensions`);
+    return embedding;
   } catch (error) {
     console.error(
       "[v0] Embedding generation failed, using fallback vector:",
@@ -221,14 +272,42 @@ export const dbHelpers = {
       : [];
 
     const scored = candidates.map((candidate) => {
-      const similarity = queryEmbedding.length
-        ? cosineSimilarity(candidate.embedding || [], queryEmbedding)
+      const candidateEmbedding = normalizeEmbeddingVector(candidate.embedding);
+      const canUseVectorSimilarity =
+        queryEmbedding.length > 0 &&
+        candidateEmbedding.length > 0 &&
+        candidateEmbedding.length === queryEmbedding.length;
+
+      const vectorSimilarity = canUseVectorSimilarity
+        ? cosineSimilarity(candidateEmbedding, queryEmbedding)
         : 0;
+
+      const lexicalSimilarity = trimmedQuery
+        ? lexicalSimilarityScore(
+            trimmedQuery,
+            [
+              candidate.filename,
+              candidate.templateType,
+              candidate.embeddingText,
+              candidate.analysis,
+              candidate.extractedText?.slice(0, 1000),
+              candidate.placeholders?.join(" "),
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          )
+        : 0;
+
       const keywordBonus = candidate.placeholders?.some((placeholder: string) =>
         trimmedQuery.toLowerCase().includes(placeholder.toLowerCase()),
       )
         ? 0.15
         : 0;
+
+      const similarity = canUseVectorSimilarity
+        ? vectorSimilarity + lexicalSimilarity * 0.2
+        : lexicalSimilarity;
+
       return {
         template: normalizeMongoRecord(candidate) as IDocxTemplate,
         score: similarity + keywordBonus,

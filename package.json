@@ -17,6 +17,7 @@
     "ai": "^6.0.209",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "docx-preview": "^0.3.7",
     "docxtemplater": "^3.69.0",
     "handlebars": "^4.7.9",
     "libreoffice-convert": "^1.8.1",

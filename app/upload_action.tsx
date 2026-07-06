@@ -292,6 +292,7 @@ export async function getStoredDocuments(): Promise<{
 
 // ─── Natural-language Template Retrieval (Phase 4) ─────────────────────────────
 export interface TemplateMatch {
+  fileBase64: string;
   templateId: string;
   filename: string;
   templateType: string;
@@ -342,6 +343,7 @@ export async function findMatchingTemplates(
     }
 
     const data: TemplateMatch[] = matches.map(({ template, score }) => ({
+      fileBase64: template.fileContent,
       templateId: String(template._id),
       filename: template.filename,
       templateType: template.templateType,
@@ -413,10 +415,7 @@ export async function fillTemplateFromText(
         error: "This template has no detected placeholders to fill",
       };
     }
-
-    // LLM maps free text -> field values, validated against the template's
-    // actual placeholder list (schema-enforced in extractPlaceholderValues,
-    // so we never trust arbitrary keys the model might otherwise invent).
+    
     const fields = await extractPlaceholderValues(
       template.placeholders,
       trimmedInput,
@@ -427,9 +426,6 @@ export async function fillTemplateFromText(
       (placeholder: string) => fields[placeholder] === null,
     );
 
-    // docxtemplater's nullGetter renders missing tags as "", but we pass
-    // explicit empty strings here too so the field map returned to the
-    // caller and the actual rendered document stay in sync.
     const renderData: Record<string, string> = {};
     for (const placeholder of template.placeholders) {
       renderData[placeholder] = fields[placeholder] ?? "";
