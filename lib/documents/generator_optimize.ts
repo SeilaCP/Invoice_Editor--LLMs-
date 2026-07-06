@@ -1,6 +1,5 @@
 import { extractDocumentData } from "../ai";
 import { dbHelpers } from "../db/mock-db";
-import { generateDocxFromTemplate } from "./docx-generator";
 import Handlebars from "handlebars";
 import PDFDocument from "pdfkit";
 
@@ -22,9 +21,6 @@ interface GenerateDocumentOutput {
   fileName: string;
   message?: string;
   error?: string;
-  docxBase64?: string;
-  pdfBase64?: string;
-  matchedTemplateId?: string;
 }
 
 Handlebars.registerHelper("inc", (value: number) => value + 1);
@@ -551,23 +547,7 @@ export async function generateDocument(
   input: GenerateDocumentInput,
 ): Promise<GenerateDocumentOutput> {
   try {
-    const matchedTemplate = await dbHelpers.findBestTemplate(
-      input.userInput,
-      input.templateType,
-    );
-
-    const skillContentParts = [
-      skillPrompts[input.templateType],
-      matchedTemplate?.analysis,
-      matchedTemplate?.placeholders?.length
-        ? `Placeholders: ${matchedTemplate.placeholders.join(", ")}`
-        : "",
-      matchedTemplate?.extractedText
-        ? `Template text:\n${matchedTemplate.extractedText}`
-        : "",
-    ].filter(Boolean);
-
-    const skillContent = skillContentParts.join("\n\n");
+    const skillContent = skillPrompts[input.templateType];
 
     if (!skillContent) {
       return {
@@ -613,18 +593,6 @@ export async function generateDocument(
     const compiled = compileTemplate(template);
     const html = compiled(extractedJson);
 
-    let docxBase64: string | undefined;
-    if (matchedTemplate?.fileContent) {
-      const docxBuffer = await generateDocxFromTemplate(
-        matchedTemplate.fileContent,
-        extractedJson,
-      );
-      docxBase64 = docxBuffer.toString("base64");
-    }
-
-    const pdfBuffer = await generatePDF(extractedJson, input.templateType);
-    const pdfBase64 = pdfBuffer.toString("base64");
-
     const timestamp = new Date().toISOString().split("T")[0];
     const documentNumber =
       extractedJson.invoiceNumber ||
@@ -636,12 +604,10 @@ export async function generateDocument(
     try {
       await dbHelpers.saveDocument({
         templateType: input.templateType,
-        templateId: matchedTemplate?._id?.toString(),
+        templateId: undefined,
         userInput: input.userInput,
         extractedJson: JSON.stringify(extractedJson),
         generatedHtml: html,
-        generatedDocxBase64: docxBase64,
-        generatedPdfBase64: pdfBase64,
         fileName,
       });
     } catch (dbError) {
@@ -654,9 +620,6 @@ export async function generateDocument(
       json: extractedJson,
       fileName,
       message: "Document generated successfully",
-      docxBase64,
-      pdfBase64,
-      matchedTemplateId: matchedTemplate?._id?.toString(),
     };
   } catch (error) {
     console.error("Error generating document:", error);

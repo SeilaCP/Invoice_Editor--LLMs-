@@ -9,8 +9,60 @@ import {
   generateMockQuotationData,
   generateMockProposalData,
 } from "./demo";
+import ollama from "ollama";
 
-type LLMProvider = "gemini" | "openai" | "claude";
+type LLMProvider = "gemini" | "openai" | "claude" | "qwen";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:14b";
+
+function extractJsonObject(text: string): string {
+  const trimmed = text.trim();
+  const fencedMatch = trimmed.match(/```json\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) return fencedMatch[1].trim();
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
+
+  return trimmed;
+}
+
+async function generateObjectWithQwen<T>(input: {
+  schema: z.ZodSchema<T>;
+  system: string;
+  prompt: string;
+}): Promise<T> {
+  const response = await ollama.chat({
+    model: OLLAMA_MODEL,
+    format: "json",
+    messages: [
+      { role: "system", content: input.system },
+      { role: "user", content: input.prompt },
+    ],
+  });
+
+  const payload = extractJsonObject(response.message.content || "{}");
+  return input.schema.parse(JSON.parse(payload));
+}
+
+async function generateTextWithQwen(input: {
+  system: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+}): Promise<string> {
+  const response = await ollama.chat({
+    model: OLLAMA_MODEL,
+    messages: [
+      { role: "system", content: input.system },
+      ...input.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    ],
+  });
+
+  return response.message.content?.trim() || "";
+}
 
 export type MessageIntent = "chat" | "document";
 
@@ -19,7 +71,6 @@ export interface IntentDetectionResult {
   templateType?: "invoice" | "quotation" | "proposal";
   confidence: number;
 }
-
 interface DocumentExtractionInput {
   userPrompt: string;
   templateType: "invoice" | "quotation" | "proposal";
@@ -31,10 +82,10 @@ interface DocumentExtractionInput {
 async function getActiveLLMProvider(): Promise<LLMProvider> {
   try {
     const setting = await dbHelpers.getSetting("active_llm_provider");
-    return (setting?.value as LLMProvider) || "gemini";
+    return (setting?.value as LLMProvider) || "qwen";
   } catch (error) {
     console.error("Error getting LLM provider:", error);
-    return "gemini";
+    return "qwen";
   }
 }
 
@@ -51,9 +102,6 @@ export function getModel(provider: LLMProvider) {
   }
 }
 
-// ─── Intent Detection ──────────────────────────────────────────────────────────
-// ─── Intent Detection ──────────────────────────────────────────────────────────
-// Fast heuristic-first: only call LLM if heuristic is uncertain
 export async function detectIntent(
   userInput: string,
   provider: LLMProvider = "gemini",
@@ -63,21 +111,13 @@ export async function detectIntent(
   const words = lowerInput.split(/\s+/).filter(Boolean);
   const wordCount = words.length;
 
-  // ── 1. Edge Case: Empty or exceptionally short input ──
   if (wordCount === 0) {
     return { intent: "chat", confidence: 1.0 };
   }
 
-  // // ── 2. Definite CHAT signals (no LLM needed) ──
   if (wordCount <= 4) {
     return { intent: "chat", confidence: 0.98 };
   }
-
-  // // Quick catch for continuous gibberish / keysmashes (e.g., "asdfasdfasdfasdf")
-  // const longestWord = Math.max(...words.map((w) => w.length));
-  // if (longestWord > 25 && !userInput.includes("http")) {
-  //   return { intent: "chat", confidence: 0.99 };
-  // }
 
   if (
     /^(hi|hello|hey|thanks|thank you|ok|okay|sure|yes|no|help|what|how|why|who|when|where|can you|do you|is it|are you|test|testing)/.test(
@@ -90,36 +130,50 @@ export async function detectIntent(
     return { intent: "chat", confidence: 0.95 };
   }
 
-  // // ── 3. Definite DOCUMENT signals (no LLM needed) ──
   const hasAmount =
     /\$\s?\d+([\.,]\d+)?|\d+\s?(usd|dollars?|€|£)|\b\d+\s?per\b|\d+\/hr/i.test(
       input,
     );
 
-  // const hasClient =
-  //   /\b(for|to|client|customer|company|corp|inc|ltd|buy|bought|purchase|ordered|bill\s?to)\b/.test(
-  //     input,
-  //   );
-
-  // // 3. Upgraded Action Keywords
   const hasAction =
     /\b(create|generate|make|build|write|draft|invoice|bill|quote|quotation|proposal)\b/.test(
       input,
     );
 
-  // const isModifying = /\b(add|change|update|remove|delete|insert|put|with|instead of)\b/.test(input);
-  // const hasProductHints = /\b(product|item|each|qty|quantity|\$|\d+)\b/.test(input);
-
-  // if (isModifying && hasProductHints) {
-  //   const templateType = detectTemplateTypeHeuristic(input);
-  //   return { intent: "document", confidence: 0.98, templateType };
-  // }
-
-  // ── 4. Uncertain — Ask the LLM with strict instructions ──
   try {
-    const result = await generateObject({
-      model: getModel(provider),
-      system: `You are an intent classification security guard for a document generation assistant.
+    if (provider == "qwen") {
+      const schema = z.object({
+        intent: z.enum(["chat", "document"]),
+        templateType: z.enum(["invoice", "quotation", "proposal"]).optional(),
+        confidence: z.number().min(0).max(1),
+      });
+
+      const parsed = await generateObjectWithQwen({
+        schema,
+        system: `You are an intent classification security guard for a document generation assistant.
+
+Your sole job is to distinguish between a legitimate request to CREATE a professional document and random chat/noise.
+
+Return ONLY valid JSON.
+
+The JSON must follow this schema:
+{
+  "intent": "chat" | "document",
+  "templateType": "invoice" | "quotation" | "proposal" | null,
+  "confidence": 0-1
+}`,
+        prompt: userInput,
+      });
+
+      return {
+        intent: parsed.intent,
+        templateType: parsed.templateType,
+        confidence: parsed.confidence,
+      };
+    } else {
+      const result = await generateObject({
+        model: getModel(provider),
+        system: `You are an intent classification security guard for a document generation assistant.
 Your sole job is to distinguish between a legitimate request to CREATE a professional document and random chat/noise.
 
 Classify as "document" ONLY if the user explicitly wants to generate an invoice, quotation, or proposal
@@ -131,38 +185,37 @@ Classify as "chat" if the input is:
 - Unstructured text that doesn't make logical sense as a business document request.
 
 If "chat", set templateType to undefined.`,
-      prompt: `Analyze this user input:\n\n"${userInput}"`,
-      schema: z.object({
-        intent: z.enum(["chat", "document"]),
-        templateType: z.enum(["invoice", "quotation", "proposal"]).optional(),
-        confidence: z.number().min(0).max(1),
-      }),
-    });
+        prompt: `Analyze this user input:\n\n"${userInput}"`,
+        schema: z.object({
+          intent: z.enum(["chat", "document"]),
+          templateType: z.enum(["invoice", "quotation", "proposal"]).optional(),
+          confidence: z.number().min(0).max(1),
+        }),
+      });
 
-    // Safeguard: If the model flagged it as chat but mistakenly threw in a templateType
-    if (result.object.intent === "chat") {
-      return { intent: "chat", confidence: result.object.confidence };
+      if (result.object.intent === "chat") {
+        return { intent: "chat", confidence: result.object.confidence };
+      }
+
+      console.log(
+        "Objected: ",
+        result.object.intent,
+        result.object.templateType,
+        result.object.confidence,
+      );
+
+      return {
+        intent: result.object.intent,
+        templateType: result.object.templateType,
+        confidence: result.object.confidence,
+      };
     }
-
-    console.log(
-      "Objected: ",
-      result.object.intent,
-      result.object.templateType,
-      result.object.confidence,
-    );
-
-    return {
-      intent: result.object.intent,
-      templateType: result.object.templateType,
-      confidence: result.object.confidence,
-    };
   } catch (error) {
     console.error("Intent detection LLM failed, defaulting to chat:", error);
     return { intent: "chat", confidence: 0.7 };
   }
 }
 
-// ─── Chat Response ─────────────────────────────────────────────────────────────
 export async function generateChatResponse(
   userMessage: string,
   conversationHistory: Array<{
@@ -174,6 +227,32 @@ export async function generateChatResponse(
   const activeProvider = provider || (await getActiveLLMProvider());
 
   try {
+    if (activeProvider === "qwen") {
+      console.log("[ai] Generating chat response with Qwen...");
+      const text = await generateTextWithQwen({
+        system: `You are a friendly assistant for a document generation platform that creates invoices, quotations, and proposals.
+
+Your job:
+- Answer questions about the platform, documents, pricing, and business practices
+- Help users understand what information they need to create a document
+- Have natural conversations
+
+When users seem ready to create a document, tell them exactly what format to use. For example:
+"Just say something like: 'Create an invoice for John Doe, web design services, $1500, due Feb 15'"
+
+Keep replies concise and helpful. Do not generate document data yourself — just guide the user.
+Stop completely there and wait for the user.`,
+        messages: [
+          ...conversationHistory,
+          { role: "user", content: userMessage },
+        ],
+      });
+
+      return text || "I'm sorry, I encountered an error. Please try again.";
+    }
+
+    console.log("[ai] Generating chat response with gemini...");
+
     const { text } = await generateText({
       model: getModel(activeProvider),
       system: `You are a friendly assistant for a document generation platform that creates invoices, quotations, and proposals.
@@ -201,7 +280,6 @@ Stop completely there and wait for the user.`,
   }
 }
 
-// ─── Document Data Extraction ──────────────────────────────────────────────────
 export async function extractDocumentData(
   input: DocumentExtractionInput,
 ): Promise<Record<string, any>> {
@@ -319,6 +397,30 @@ export async function extractDocumentData(
 
   try {
     console.log("Start Detected", input);
+
+    if (provider === "qwen") {
+      const object = await generateObjectWithQwen({
+        schema: genSchema,
+        system: `${input.skillContent}
+IMPORTANT: Always fill in reasonable defaults for missing fields:
+- invoiceNumber/quotationNumber/proposalNumber: generate as "INV-001", "QUO-001", "PRO-001"
+- dates: use today's date if not specified (${new Date().toISOString().split("T")[0]})
+- dueDate: default to 30 days from today if not specified
+- tax: default to 0 if not mentioned
+- Calculate subtotal, tax, and total correctly from items
+- If quantity is not specified, default to 1
+- companyName: use "Your Company" if not specified
+
+CRITICAL LENGTH RULE:
+If your response requires explaining a long concept or a massive amount of text, write ONLY the first 2-3 paragraphs or steps.
+At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read more]".`,
+        prompt: fullPrompt,
+      });
+
+      console.log("Document Detected: ", object);
+      return object as Record<string, any>;
+    }
+
     const result = await generateObject({
       model: getModel(provider),
       system: `${input.skillContent}
@@ -340,9 +442,8 @@ At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read mor
 
     let clearedPrompt = input.userPrompt;
     if (clearedPrompt.includes("[due date]")) {
-      // Replace string placeholder with a real calculated default date string
       const defaultDate = new Date();
-      defaultDate.setDate(defaultDate.getDate() + 3); // default 30 days out
+      defaultDate.setDate(defaultDate.getDate() + 3);
       const dateStr = defaultDate.toISOString().split("T")[0];
 
       clearedPrompt = clearedPrompt.replace(/\[due\s?date\]/gi, dateStr);
@@ -354,8 +455,6 @@ At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read mor
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
-
-    // Fall back to demo data on auth errors
     const isAuthError =
       errorMessage.includes("credit card") ||
       errorMessage.includes("authentication") ||
@@ -377,7 +476,92 @@ At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read mor
   }
 }
 
-// ─── Provider Config ───────────────────────────────────────────────────────────
+export async function extractPlaceholderValues(
+  placeholders: string[],
+  userInput: string,
+  provider?: LLMProvider,
+): Promise<Record<string, string | null>> {
+  if (!placeholders.length) return {};
+
+  const activeProvider = provider || (await getActiveLLMProvider());
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const placeholder of placeholders) {
+    shape[placeholder] = z.union([z.string(), z.number()]).nullable();
+  }
+  const schema = z.object(shape);
+
+  try {
+    if (activeProvider === "qwen") {
+      const object = await generateObjectWithQwen({
+        schema,
+        system: `You extract structured field values from a user's free-text description to fill in a document template.
+You will be given a list of placeholder field names taken verbatim from the template, and the user's text.
+Return a JSON object with exactly those field names as keys.
+- If a value for a field is clearly present or can be reasonably inferred from the user's text, use it.
+- If you cannot confidently determine a field's value, set it to null. Do NOT guess or invent data for fields you are unsure about.
+- Keep values short and plain (no extra commentary).
+- If user not includes dates or id number, set them to reasonable defaults: use today's date for any missing date, and generate a default ID like "INV-001" or "QUO-001" for any missing invoice/quotation/proposal number.
+- Calculate subtotal, tax, and total correctly from items if they are present in the template, and default tax to 0 if not mentioned.`,
+        prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
+      });
+
+      const output: Record<string, string | null> = {};
+      for (const placeholder of placeholders) {
+        const value = (object as Record<string, unknown>)[placeholder];
+        output[placeholder] =
+          value === undefined || value === null
+            ? null
+            : sanitizeExtractedValue(String(value));
+      }
+      return output;
+    }
+
+    const result = await generateObject({
+      model: getModel(activeProvider),
+      maxOutputTokens: 1000,
+      abortSignal: AbortSignal.timeout(45_000),
+      system: `You extract structured field values from a user's free-text description to fill in a document template.
+You will be given a list of placeholder field names taken verbatim from the template, and the user's text.
+Return a JSON object with exactly those field names as keys.
+- If a value for a field is clearly present or can be reasonably inferred from the user's text, use it.
+- If you cannot confidently determine a field's value, set it to null. Do NOT guess or invent data for fields you are unsure about.
+- Keep values short and plain (no extra commentary).
+- If user not includes dates or id number, set them to reasonable defaults: use today's date for any missing date, and generate a default ID like "INV-001" or "QUO-001" for any missing invoice/quotation/proposal number.
+- Calculate subtotal, tax, and total correctly from items if they are present in the template, and default tax to 0 if not mentioned.`,
+      prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
+      schema,
+    });
+
+    const output: Record<string, string | null> = {};
+    for (const placeholder of placeholders) {
+      const value = (result.object as Record<string, unknown>)[placeholder];
+      output[placeholder] =
+        value === undefined || value === null
+          ? null
+          : sanitizeExtractedValue(String(value));
+    }
+    return output;
+  } catch (error) {
+    console.error("[ai] extractPlaceholderValues failed:", error);
+    const fallback: Record<string, string | null> = {};
+    for (const placeholder of placeholders) fallback[placeholder] = null;
+    return fallback;
+  }
+}
+
+function sanitizeExtractedValue(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('"') || /[{}]/.test(trimmed)) {
+    console.warn(
+      "[ai] Discarding suspicious extracted value (looks like malformed JSON leakage):",
+      trimmed,
+    );
+    return null;
+  }
+  return trimmed.replace(/[,;]\s*$/, "").trim() || null;
+}
+
 export async function getProvidersConfig() {
   return {
     providers: [
@@ -399,6 +583,12 @@ export async function getProvidersConfig() {
         model: "claude-sonnet-4-5",
         requiresKey: true,
       },
+      {
+        id: "qwen",
+        name: "Qwen (Ollama)",
+        model: OLLAMA_MODEL,
+        requiresKey: false,
+      },
     ],
     activeProvider: await getActiveLLMProvider(),
   };
@@ -418,12 +608,22 @@ export async function setActiveProvider(provider: LLMProvider) {
   }
 }
 
-// ─── Template Type Detection ───────────────────────────────────────────────────
 export async function detectTemplateType(
   userInput: string,
   provider: LLMProvider = "gemini",
 ): Promise<"invoice" | "quotation" | "proposal"> {
   try {
+    if (provider === "qwen") {
+      const object = await generateObjectWithQwen({
+        schema: z.object({
+          detectedType: z.enum(["invoice", "quotation", "proposal"]),
+        }),
+        system: `Classify: invoice, quotation, proposal. Return JSON only.`,
+        prompt: `"${userInput}"`,
+      });
+      return object.detectedType;
+    }
+
     const result = await generateObject({
       model: getModel(provider),
       system: `Classify: invoice, quotation , proposal.`,
