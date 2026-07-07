@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { TemplateChatDashboard } from "@/components/template-chat-dashboard";
-import { ensureDatabaseInitialized } from "../actions";
+import { ensureDatabaseInitialized } from "../upload_action";
 
 export default function TemplatesPage() {
   useEffect(() => {

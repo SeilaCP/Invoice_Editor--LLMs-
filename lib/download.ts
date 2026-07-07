@@ -1,7 +1,3 @@
-/**
- * Utility functions for downloading files in the browser
- */
-
 export function downloadFile(
   content: string,
   filename: string,
@@ -36,12 +32,6 @@ export function downloadJSON(data: Record<string, any>, filename: string) {
   downloadFile(JSON.stringify(data, null, 2), filename, "application/json");
 }
 
-/**
- * Downloads a base64-encoded binary payload (e.g. a generated .docx) as a
- * file. Uses a Blob + object URL rather than a data: URI since base64 docx
- * files can be large and data: URIs have practical length limits in some
- * browsers.
- */
 export function downloadBase64File(
   base64: string,
   filename: string,

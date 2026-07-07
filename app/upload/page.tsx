@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { UploadSection } from "@/lib/upload/upload_section";
-import { ensureDatabaseInitialized } from "../actions";
+import { ensureDatabaseInitialized } from "../upload_action";
 
 export default function UploadPage() {
   const [lastUploadType, setLastUploadType] = useState<"docx" | "pdf" | null>(

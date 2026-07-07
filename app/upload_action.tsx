@@ -25,9 +25,27 @@ import { extractPlaceholderValues } from "@/lib/ai";
 
 type LLMProvider = "gemini" | "openai" | "claude" | "qwen";
 
+let initialized = false;
+export async function ensureDatabaseInitialized() {
+  if (!initialized) {
+    try {
+      initialized = true;
+      return { success: true };
+    } catch (error) {
+      console.error("Failed to initialize database:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  }
+  return { success: true };
+}
+
 function getModel(provider: LLMProvider) {
   return google("gemini-2.5-flash-lite");
 }
+
 export async function analyzeTemplateWithGemini(
   text: string,
   placeholders: string[],
@@ -415,7 +433,7 @@ export async function fillTemplateFromText(
         error: "This template has no detected placeholders to fill",
       };
     }
-    
+
     const fields = await extractPlaceholderValues(
       template.placeholders,
       trimmedInput,

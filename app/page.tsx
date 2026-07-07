@@ -1,13 +1,6 @@
 import Link from "next/link";
 
 const cards = [
-  // {
-  //   href: "/chat",
-  //   title: "Chat Dashboard",
-  //   description:
-  //     "Generate invoices, quotations, and proposals through a guided AI chat flow.",
-  //   accent: "from-slate-900 via-slate-800 to-slate-700",
-  // },
   {
     href: "/upload",
     title: "Upload Center",
