@@ -1,11 +1,17 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Download, RefreshCcw } from "lucide-react";
-import { findMatchingTemplates, fillTemplateFromText } from "@/app/actions";
+import { Send, Bot, User, Download, RefreshCcw, Paperclip } from "lucide-react";
+import {
+  findMatchingTemplates,
+  fillTemplateFromText,
+  uploadDocxTemplate,
+  uploadPdf,
+} from "@/app/actions";
 import type { TemplateMatch, FillTemplateResult } from "@/app/upload_action";
 import { downloadBase64File } from "@/lib/download";
 import { renderAsync } from "docx-preview";
+import { Button } from "@/components/ui/button";
 
 interface Message {
   id: string;
@@ -22,6 +28,13 @@ interface TemplateDocxGenerateProps {
   previewError: string | null;
   previewUrl: string | null;
   docxPreviewRef: React.RefObject<HTMLDivElement>;
+}
+
+interface UploadSectionProps {
+  type: "docx" | "pdf";
+  title: string;
+  description: string;
+  onUploadSuccess: () => void;
 }
 
 function decodeBase64ToBlob(base64Data: string, mimeType: string) {
@@ -80,6 +93,15 @@ export function TemplateChatDashboard() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const docxPreviewRef = useRef<HTMLDivElement>(null);
   const [printMsg, setPrintMsg] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragRef = useRef<HTMLDivElement>(null);
+
+  const [lastUploadType, setLastUploadType] = useState<"docx" | "pdf" | null>(
+    null,
+  );
+  const type = lastUploadType === "docx" ? "docx" : "pdf";
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -473,6 +495,28 @@ export function TemplateChatDashboard() {
       <div className="border-t border-border px-4 py-4 bg-background">
         <div className="max-w-2xl mx-auto">
           <div className="flex gap-3 items-end">
+            {/* <input
+              type="file"
+              accept={type === "docx" ? ".doc,.docx" : ".pdf"}
+              hidden
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-all"
+            >
+              <Paperclip size={18} />
+            </button> */}
+
+            <UploadSection
+              type="docx"
+              title="Upload DOCX Template"
+              description="Upload your DOCX template file here."
+              onUploadSuccess={() => setLastUploadType("docx")}
+            />
+
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -565,5 +609,139 @@ export function TemplateDocxGenerate({
         )}
       </div>
     </>
+  );
+}
+
+export function UploadSection({
+  type,
+  title,
+  description,
+  onUploadSuccess,
+}: UploadSectionProps) {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragRef = useRef<HTMLDivElement>(null);
+
+  const handleUpload = async (file: File) => {
+    setIsLoading(true);
+    setError(null);
+    setSuccess(false);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      let result;
+      if (type === "docx") {
+        result = await uploadDocxTemplate(formData);
+      } else {
+        result = await uploadPdf(formData);
+      }
+
+      if (result.success) {
+        setSuccess(true);
+        setTimeout(() => setSuccess(false), 3000);
+        onUploadSuccess();
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+      } else {
+        setError(result.error || "Upload failed");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleUpload(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragRef.current) {
+      dragRef.current.classList.add("border-primary", "bg-primary/5");
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragRef.current) {
+      dragRef.current.classList.remove("border-primary", "bg-primary/5");
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragRef.current) {
+      dragRef.current.classList.remove("border-primary", "bg-primary/5");
+    }
+
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      const lowerName = file.name.toLowerCase();
+      const isCorrectType =
+        type === "docx"
+          ? lowerName.endsWith(".docx") || lowerName.endsWith(".doc")
+          : lowerName.endsWith(".pdf");
+      if (isCorrectType) {
+        handleUpload(file);
+      } else {
+        setError(
+          `Please upload a ${type === "docx" ? "DOC or DOCX" : "PDF"} file`,
+        );
+      }
+    }
+  };
+
+  return (
+    <div className="">
+      <div
+        ref={dragRef}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-all"
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={type === "docx" ? ".doc,.docx" : ".pdf"}
+          onChange={handleFileChange}
+          disabled={isLoading}
+          className="hidden"
+        />
+
+        <Button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isLoading}
+          className="hover:bg-accent-light"
+        >
+          <Paperclip size={18} />
+        </Button>
+      </div>
+
+      {/* {error && (
+        <div className="fix mt-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="fix mt-4 p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+          File uploaded successfully!
+        </div>
+      )} */}
+    </div>
   );
 }

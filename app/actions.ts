@@ -14,7 +14,7 @@ import {
   detectTemplateType,
   detectIntent,
   generateChatResponse,
-} from "@/lib/ai";
+} from "@/lib/ai/index";
 
 let initialized = false;
 

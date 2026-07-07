@@ -252,13 +252,11 @@ export const dbHelpers = {
     await connectDB();
     const limit = options.limit && options.limit > 0 ? options.limit : 5;
 
-    // Only templates with a successfully generated embedding are eligible for
-    // vector similarity ranking — "pending"/"failed" templates would always
-    // score 0 and could otherwise crowd out real matches.
     const readyQuery: Record<string, any> = { status: "ready" };
     if (options.templateType && options.templateType !== "generic") {
       readyQuery.templateType = options.templateType;
     }
+    console.log(`[v0] Searching for templates matching "${queryText}" with type ...`);
 
     const candidates = await DocxTemplate.find(readyQuery)
       .sort({ updatedAt: -1 })

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   app:
     build:
@@ -9,15 +7,15 @@ services:
       - "3000:3000"
     environment:
       # MongoDB
-      MONGODB_URI: ${MONGODB_URI}
+      MONGODB_URI: mongodb://localhost:27017/
 
       # AI providers (optional providers)
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY}
+      # OPENAI_API_KEY: mongodb://localhost:27017/
+      # ANTHROPIC_API_KEY: mongodb://localhost:27017/
+      # GOOGLE_GENERATIVE_AI_API_KEY: mongodb://localhost:27017/
 
       # Ollama — points to the ollama service below by default
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:14b}
 
       NODE_ENV: production
@@ -61,7 +59,7 @@ services:
     command:
       - |
         echo 'Waiting for Ollama to be ready...'
-        until curl -sf http://ollama:11434/api/tags > /dev/null; do sleep 2; done
+        until ollama list > /dev/null 2>&1; do sleep 2; done
         echo 'Pulling qwen2.5:14b...'
         ollama pull qwen2.5:14b
         echo 'Pulling nomic-embed-text...'
