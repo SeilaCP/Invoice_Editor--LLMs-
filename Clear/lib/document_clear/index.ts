@@ -9,7 +9,7 @@ import {
   generateMockQuotationData,
   generateMockProposalData,
 } from "./demo";
-import ollama from "ollama";
+import { ollamaClient as ollama } from "@/lib/ai/ollama-client";
 
 type LLMProvider = "gemini" | "openai" | "claude" | "qwen";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:14b";

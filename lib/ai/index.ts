@@ -4,7 +4,7 @@ import { dbHelpers } from "../db/mock-db";
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { anthropic } from "@ai-sdk/anthropic";
-import ollama from "ollama";
+import { ollamaClient as ollama } from "./ollama-client";
 
 type LLMProvider = "gemini" | "openai" | "claude" | "qwen";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:14b";
@@ -606,15 +606,15 @@ At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read mor
       errorMessage.includes("401") ||
       errorMessage.includes("403");
 
-    if (isAuthError) {
-      console.log("[ai] Auth error — using demo data");
-      if (input.templateType === "invoice")
-        return generateMockInvoiceData(input.userPrompt);
-      if (input.templateType === "quotation")
-        return generateMockQuotationData(input.userPrompt);
-      if (input.templateType === "proposal")
-        return generateMockProposalData(input.userPrompt);
-    }
+    // if (isAuthError) {
+    //   console.log("[ai] Auth error — using demo data");
+    //   if (input.templateType === "invoice")
+    //     return generateMockInvoiceData(input.userPrompt);
+    //   if (input.templateType === "quotation")
+    //     return generateMockQuotationData(input.userPrompt);
+    //   if (input.templateType === "proposal")
+    //     return generateMockProposalData(input.userPrompt);
+    // }
 
     throw new Error(`Failed to extract document data: ${errorMessage}`);
   }

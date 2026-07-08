@@ -61,8 +61,8 @@ services:
       - -c
       - |
         sleep 10
-        ollama pull qwen2.5:14b
-        ollama pull nomic-embed-text
+        until ollama pull qwen2.5:7b; do echo "retrying qwen2.5:7b pull..."; sleep 5; done
+        until ollama pull nomic-embed-text; do echo "retrying nomic-embed-text pull..."; sleep 5; done
 
 volumes:
   mongodb_data:

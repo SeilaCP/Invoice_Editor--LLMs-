@@ -12,7 +12,7 @@ import {
   SettingRecord,
   TemplateType,
 } from "@/lib/mongodb";
-import ollama from "ollama";
+import { ollamaClient as ollama } from "@/lib/ai/ollama-client";
 
 function getEmbeddingModel() {
   return google.embeddingModel("gemini-embedding-001");
@@ -107,7 +107,7 @@ export async function buildEmbedding(
 
   try {
     const result = await ollama.embed({
-      model: "nomic-embed-text:v1.5",
+      model: process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text",
       input: normalizedText.slice(0, 8000),
     });
     // const result = await embed({
@@ -256,7 +256,9 @@ export const dbHelpers = {
     if (options.templateType && options.templateType !== "generic") {
       readyQuery.templateType = options.templateType;
     }
-    console.log(`[v0] Searching for templates matching "${queryText}" with type ...`);
+    console.log(
+      `[v0] Searching for templates matching "${queryText}" with type ...`,
+    );
 
     const candidates = await DocxTemplate.find(readyQuery)
       .sort({ updatedAt: -1 })
