@@ -1,74 +1,69 @@
+version: "3.9"
+
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
+    container_name: nextjs-app
+
     ports:
       - "3000:3000"
+
+    volumes:
+      - .:/app
+      - /app/node_modules
+
     environment:
-      # MongoDB
-      MONGODB_URI: mongodb://localhost:27017/
+      NODE_ENV: development
+      OLLAMA_HOST: http://ollama:11434
+      MONGODB_URI: mongodb://mongodb:27017/test
 
-      # AI providers (optional providers)
-      # OPENAI_API_KEY: mongodb://localhost:27017/
-      # ANTHROPIC_API_KEY: mongodb://localhost:27017/
-      # GOOGLE_GENERATIVE_AI_API_KEY: mongodb://localhost:27017/
-
-      # Ollama — points to the ollama service below by default
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:14b}
-
-      NODE_ENV: production
     depends_on:
       - mongodb
       - ollama
-    restart: unless-stopped
+
+    command: npm run dev
 
   mongodb:
-    image: mongo:7
+    image: mongo:8
+    container_name: mongodb
+
+    restart: unless-stopped
+
     ports:
       - "27017:27017"
+
     volumes:
-      - mongo_data:/data/db
-    restart: unless-stopped
+      - mongodb_data:/data/db
 
   ollama:
     image: ollama/ollama:latest
+    container_name: ollama
+
+    restart: unless-stopped
+
     ports:
       - "11434:11434"
+
     volumes:
       - ollama_data:/root/.ollama
-    restart: unless-stopped
-    # Uncomment the lines below if you have an NVIDIA GPU:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
 
-  # Pulls required Ollama models on first startup, then exits
   ollama-init:
     image: ollama/ollama:latest
+
     depends_on:
       - ollama
-    volumes:
-      - ollama_data:/root/.ollama
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        echo 'Waiting for Ollama to be ready...'
-        until ollama list > /dev/null 2>&1; do sleep 2; done
-        echo 'Pulling qwen2.5:14b...'
-        ollama pull qwen2.5:14b
-        echo 'Pulling nomic-embed-text...'
-        ollama pull nomic-embed-text
-        echo 'All models ready.'
+
     environment:
       OLLAMA_HOST: http://ollama:11434
-    restart: "no"
+
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sleep 10
+        ollama pull qwen2.5:14b
+        ollama pull nomic-embed-text
 
 volumes:
-  mongo_data:
+  mongodb_data:
   ollama_data:

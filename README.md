@@ -24,9 +24,3 @@ OLLAMA_MODEL=qwen2.5:14b
 ```
 docker compose up --build
 ```
-
-## 3. (First run) Pull the Ollama model
-
-```
-docker compose exec ollama ollama pull qwen2.5:14b
-```
