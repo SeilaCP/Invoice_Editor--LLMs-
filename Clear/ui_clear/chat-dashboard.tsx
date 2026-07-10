@@ -1,17 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import {
-  Send,
-  Settings,
-  Download,
-  FileJson,
-  ChevronDown,
-  Sparkles,
-  Bot,
-  User,
-} from "lucide-react";
-import { handleUserMessage } from "@/app/actions";
+import { Send, Settings, Download, Sparkles, Bot, User } from "lucide-react";
+import { generatePdfAction, handleUserMessage } from "@/app/actions";
 
 interface Message {
   id: string;
@@ -21,14 +12,14 @@ interface Message {
   html?: string;
   json?: Record<string, any>;
   fileName?: string;
-  templateType?: string;
+  templateType?: "invoice" | "quotation" | "proposal";
 }
 
 const PROVIDERS = [
   { value: "gemini", label: "Gemini" },
   { value: "openai", label: "OpenAI" },
   { value: "claude", label: "Claude" },
-  { value: "deepseek", label: "DeepSeek" },
+  { value: "qwen", label: "Qwen" },
 ] as const;
 
 export function ChatDashboard() {
@@ -44,8 +35,8 @@ export function ChatDashboard() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [activeProvider, setActiveProvider] = useState<
-    "gemini" | "openai" | "claude"
-  >("gemini");
+    "gemini" | "openai" | "claude" | "qwen"
+  >("qwen");
   const [showSettings, setShowSettings] = useState(false);
   // Per-message JSON tab state: messageId -> boolean
   const [jsonTabOpen, setJsonTabOpen] = useState<Record<string, boolean>>({});
@@ -69,7 +60,7 @@ export function ChatDashboard() {
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
-      type: "document", // user messages are always "chat" type for history
+      type: "chat",
       content: text,
     };
 
@@ -79,6 +70,7 @@ export function ChatDashboard() {
 
     try {
       // Single entry point — routes to chat or document internally
+      console.log("[chat-dashboard] Sending user message to handleUserMessage...", activeProvider);
       const result = await handleUserMessage(
         text,
         conversationHistory,
@@ -113,16 +105,33 @@ export function ChatDashboard() {
 
     setIsLoading(false);
   };
+  const handleDownloadPdf = async (msg: Message) => {
+    if (!msg.json) return;
+    try {
+      const pdfBase64 = await generatePdfAction(
+        msg.json,
+        msg.templateType ?? "invoice",
+      );
 
-  const downloadFile = (
-    content: string,
-    fileName: string,
-    mimeType: string,
-  ) => {
-    const a = document.createElement("a");
-    a.href = `data:${mimeType};charset=utf-8,` + encodeURIComponent(content);
-    a.download = fileName;
-    a.click();
+      const byteChars = atob(pdfBase64);
+      const byteNumbers = new Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: "application/pdf" });
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (msg.fileName || "document").replace(/\.html$/, "") + ".pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download PDF:", err);
+    }
   };
 
   const toggleJsonTab = (id: string) =>
@@ -235,16 +244,6 @@ export function ChatDashboard() {
                       >
                         Preview
                       </button>
-                      <button
-                        onClick={() => toggleJsonTab(msg.id)}
-                        className={`px-4 py-2 text-xs font-medium transition-colors ${
-                          jsonTabOpen[msg.id]
-                            ? "text-primary border-b-2 border-primary bg-background"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        JSON
-                      </button>
                     </div>
 
                     {/* Preview */}
@@ -267,34 +266,11 @@ export function ChatDashboard() {
                     {/* Download row */}
                     <div className="flex gap-2 px-4 py-3 border-t border-border bg-muted/20">
                       <button
-                        onClick={() =>
-                          downloadFile(
-                            msg.html!,
-                            msg.fileName || "document.html",
-                            "text/html",
-                          )
-                        }
+                        onClick={() => handleDownloadPdf(msg)}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-background border border-border rounded-lg hover:bg-muted transition-colors"
                       >
-                        <Download size={13} /> HTML
+                        <Download size={13} /> PDF
                       </button>
-                      {msg.json && (
-                        <button
-                          onClick={() =>
-                            downloadFile(
-                              JSON.stringify(msg.json, null, 2),
-                              (msg.fileName || "document").replace(
-                                ".html",
-                                ".json",
-                              ),
-                              "application/json",
-                            )
-                          }
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-background border border-border rounded-lg hover:bg-muted transition-colors"
-                        >
-                          <FileJson size={13} /> JSON
-                        </button>
-                      )}
                     </div>
                   </div>
                 )}

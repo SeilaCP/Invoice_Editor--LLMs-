@@ -1,0 +1,69 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: nextjs-app
+
+    ports:
+      - "3000:3000"
+
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+    environment:
+      NODE_ENV: development
+      OLLAMA_HOST: http://ollama:11434
+      MONGODB_URI: mongodb://mongodb:27017/test
+
+    depends_on:
+      - mongodb
+      - ollama
+
+    command: npm run dev
+
+  mongodb:
+    image: mongo:8
+    container_name: mongodb
+
+    restart: unless-stopped
+
+    ports:
+      - "27017:27017"
+
+    volumes:
+      - mongodb_data:/data/db
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+
+    restart: unless-stopped
+
+    ports:
+      - "11434:11434"
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+  ollama-init:
+    image: ollama/ollama:latest
+
+    depends_on:
+      - ollama
+
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sleep 10
+        until ollama pull qwen2.5:7b; do echo "retrying qwen2.5:7b pull..."; sleep 5; done
+        until ollama pull nomic-embed-text; do echo "retrying nomic-embed-text pull..."; sleep 5; done
+
+volumes:
+  mongodb_data:
+  ollama_data:

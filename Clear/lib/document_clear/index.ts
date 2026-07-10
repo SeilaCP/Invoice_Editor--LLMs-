@@ -4,165 +4,15 @@ import { dbHelpers } from "../db/mock-db";
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { anthropic } from "@ai-sdk/anthropic";
-import { ollamaClient as ollama } from "./ollama-client";
+import {
+  generateMockInvoiceData,
+  generateMockQuotationData,
+  generateMockProposalData,
+} from "./demo";
+import { ollamaClient as ollama } from "@/lib/ai/ollama-client";
 
 type LLMProvider = "gemini" | "openai" | "claude" | "qwen";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:14b";
-
-export type MessageIntent = "chat" | "document";
-
-export interface IntentDetectionResult {
-  intent: MessageIntent;
-  templateType?: "invoice" | "quotation" | "proposal";
-  confidence: number;
-}
-interface DocumentExtractionInput {
-  userPrompt: string;
-  templateType: "invoice" | "quotation" | "proposal";
-  skillContent: string;
-  memoryContext?: Record<string, any>;
-  provider?: LLMProvider;
-}
-
-export async function getProvidersConfig() {
-  return {
-    providers: [
-      {
-        id: "gemini",
-        name: "Google Gemini",
-        model: "gemini-2.5-flash-lite",
-        requiresKey: true,
-      },
-      {
-        id: "openai",
-        name: "OpenAI GPT-4",
-        model: "gpt-4o-mini",
-        requiresKey: true,
-      },
-      {
-        id: "claude",
-        name: "Anthropic Claude",
-        model: "claude-sonnet-4-5",
-        requiresKey: true,
-      },
-      {
-        id: "qwen",
-        name: "Qwen (Ollama)",
-        model: OLLAMA_MODEL,
-        requiresKey: false,
-      },
-    ],
-    activeProvider: await getActiveLLMProvider(),
-  };
-}
-
-export async function setActiveProvider(provider: LLMProvider) {
-  try {
-    await dbHelpers.setSetting(
-      "active_llm_provider",
-      provider,
-      "Active LLM provider",
-    );
-    return { success: true, provider };
-  } catch (error) {
-    console.error("Error setting active provider:", error);
-    throw error;
-  }
-}
-
-export async function detectTemplateType(
-  userInput: string,
-  provider: LLMProvider = "gemini",
-): Promise<"invoice" | "quotation" | "proposal"> {
-  try {
-    if (provider === "qwen") {
-      const object = await generateObjectWithQwen({
-        schema: z.object({
-          detectedType: z.enum(["invoice", "quotation", "proposal"]),
-        }),
-        system: `Classify: invoice, quotation, proposal. Return JSON only.`,
-        prompt: `"${userInput}"`,
-      });
-      return object.detectedType;
-    }
-
-    const result = await generateObject({
-      model: getModel(provider),
-      system: `Classify: invoice, quotation , proposal.`,
-      prompt: `"${userInput}"`,
-      schema: z.object({
-        detectedType: z.enum(["invoice", "quotation", "proposal"]),
-      }),
-    });
-    return result.object.detectedType;
-  } catch {
-    return detectTemplateTypeHeuristic(userInput);
-  }
-}
-
-export async function generateChatResponse(
-  userMessage: string,
-  conversationHistory: Array<{
-    role: "user" | "assistant";
-    content: string;
-  }> = [],
-  provider?: LLMProvider,
-): Promise<string> {
-  const activeProvider = provider || (await getActiveLLMProvider());
-
-  try {
-    if (activeProvider === "qwen") {
-      console.log("[ai] Generating chat response with Qwen...");
-      const text = await generateTextWithQwen({
-        system: `You are a friendly assistant for a document generation platform that creates invoices, quotations, and proposals.
-
-Your job:
-- Answer questions about the platform, documents, pricing, and business practices
-- Help users understand what information they need to create a document
-- Have natural conversations
-
-When users seem ready to create a document, tell them exactly what format to use. For example:
-"Just say something like: 'Create an invoice for John Doe, web design services, $1500, due Feb 15'"
-
-Keep replies concise and helpful. Do not generate document data yourself — just guide the user.
-Stop completely there and wait for the user.`,
-        messages: [
-          ...conversationHistory,
-          { role: "user", content: userMessage },
-        ],
-      });
-
-      return text || "I'm sorry, I encountered an error. Please try again.";
-    }
-
-    console.log("[ai] Generating chat response with gemini...");
-
-    const { text } = await generateText({
-      model: getModel(activeProvider),
-      system: `You are a friendly assistant for a document generation platform that creates invoices, quotations, and proposals.
-
-Your job:
-- Answer questions about the platform, documents, pricing, and business practices
-- Help users understand what information they need to create a document
-- Have natural conversations
-
-When users seem ready to create a document, tell them exactly what format to use. For example:
-"Just say something like: 'Create an invoice for John Doe, web design services, $1500, due Feb 15'"
-
-Keep replies concise and helpful. Do not generate document data yourself — just guide the user.
-Stop completely there and wait for the user.`,
-      messages: [
-        ...conversationHistory,
-        { role: "user", content: userMessage },
-      ],
-    });
-
-    return text;
-  } catch (error) {
-    console.error("Error generating chat response:", error);
-    return "I'm sorry, I encountered an error. Please try again.";
-  }
-}
 
 function extractJsonObject(text: string): string {
   const trimmed = text.trim();
@@ -212,6 +62,21 @@ async function generateTextWithQwen(input: {
   });
 
   return response.message.content?.trim() || "";
+}
+
+export type MessageIntent = "chat" | "document";
+
+export interface IntentDetectionResult {
+  intent: MessageIntent;
+  templateType?: "invoice" | "quotation" | "proposal";
+  confidence: number;
+}
+interface DocumentExtractionInput {
+  userPrompt: string;
+  templateType: "invoice" | "quotation" | "proposal";
+  skillContent: string;
+  memoryContext?: Record<string, any>;
+  provider?: LLMProvider;
 }
 
 async function getActiveLLMProvider(): Promise<LLMProvider> {
@@ -351,76 +216,67 @@ If "chat", set templateType to undefined.`,
   }
 }
 
-export async function extractPlaceholderValues(
-  placeholders: string[],
-  userInput: string,
+export async function generateChatResponse(
+  userMessage: string,
+  conversationHistory: Array<{
+    role: "user" | "assistant";
+    content: string;
+  }> = [],
   provider?: LLMProvider,
-): Promise<Record<string, string | null>> {
-  if (!placeholders.length) return {};
-
+): Promise<string> {
   const activeProvider = provider || (await getActiveLLMProvider());
-  const shape: Record<string, z.ZodTypeAny> = {};
-  for (const placeholder of placeholders) {
-    shape[placeholder] = z.union([z.string(), z.number()]).nullable();
-  }
-  const schema = z.object(shape);
 
   try {
     if (activeProvider === "qwen") {
-      const object = await generateObjectWithQwen({
-        schema,
-        system: `You extract structured field values from a user's free-text description to fill in a document template.
-You will be given a list of placeholder field names taken verbatim from the template, and the user's text.
-Return a JSON object with exactly those field names as keys.
-- If a value for a field is clearly present or can be reasonably inferred from the user's text, use it.
-- If you cannot confidently determine a field's value, set it to null. Do NOT guess or invent data for fields you are unsure about.
-- Keep values short and plain (no extra commentary).
-- If user not includes dates or id number, set them to reasonable defaults: use today's date for any missing date, and generate a default ID like "INV-001" or "QUO-001" for any missing invoice/quotation/proposal number.
-- Calculate subtotal, tax, and total correctly from items if they are present in the template, and default tax to 0 if not mentioned.`,
-        prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
+      console.log("[ai] Generating chat response with Qwen...");
+      const text = await generateTextWithQwen({
+        system: `You are a friendly assistant for a document generation platform that creates invoices, quotations, and proposals.
+
+Your job:
+- Answer questions about the platform, documents, pricing, and business practices
+- Help users understand what information they need to create a document
+- Have natural conversations
+
+When users seem ready to create a document, tell them exactly what format to use. For example:
+"Just say something like: 'Create an invoice for John Doe, web design services, $1500, due Feb 15'"
+
+Keep replies concise and helpful. Do not generate document data yourself — just guide the user.
+Stop completely there and wait for the user.`,
+        messages: [
+          ...conversationHistory,
+          { role: "user", content: userMessage },
+        ],
       });
 
-      const output: Record<string, string | null> = {};
-      for (const placeholder of placeholders) {
-        const value = (object as Record<string, unknown>)[placeholder];
-        output[placeholder] =
-          value === undefined || value === null
-            ? null
-            : sanitizeExtractedValue(String(value));
-      }
-      return output;
+      return text || "I'm sorry, I encountered an error. Please try again.";
     }
 
-    const result = await generateObject({
+    console.log("[ai] Generating chat response with gemini...");
+
+    const { text } = await generateText({
       model: getModel(activeProvider),
-      maxOutputTokens: 1000,
-      abortSignal: AbortSignal.timeout(45_000),
-      system: `You extract structured field values from a user's free-text description to fill in a document template.
-You will be given a list of placeholder field names taken verbatim from the template, and the user's text.
-Return a JSON object with exactly those field names as keys.
-- If a value for a field is clearly present or can be reasonably inferred from the user's text, use it.
-- If you cannot confidently determine a field's value, set it to null. Do NOT guess or invent data for fields you are unsure about.
-- Keep values short and plain (no extra commentary).
-- If user not includes dates or id number, set them to reasonable defaults: use today's date for any missing date, and generate a default ID like "INV-001" or "QUO-001" for any missing invoice/quotation/proposal number.
-- Calculate subtotal, tax, and total correctly from items if they are present in the template, and default tax to 0 if not mentioned.`,
-      prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
-      schema,
+      system: `You are a friendly assistant for a document generation platform that creates invoices, quotations, and proposals.
+
+Your job:
+- Answer questions about the platform, documents, pricing, and business practices
+- Help users understand what information they need to create a document
+- Have natural conversations
+
+When users seem ready to create a document, tell them exactly what format to use. For example:
+"Just say something like: 'Create an invoice for John Doe, web design services, $1500, due Feb 15'"
+
+Keep replies concise and helpful. Do not generate document data yourself — just guide the user.
+Stop completely there and wait for the user.`,
+      messages: [
+        ...conversationHistory,
+        { role: "user", content: userMessage },
+      ],
     });
 
-    const output: Record<string, string | null> = {};
-    for (const placeholder of placeholders) {
-      const value = (result.object as Record<string, unknown>)[placeholder];
-      output[placeholder] =
-        value === undefined || value === null
-          ? null
-          : sanitizeExtractedValue(String(value));
-    }
-    return output;
+    return text;
   } catch (error) {
-    console.error("[ai] extractPlaceholderValues failed:", error);
-    const fallback: Record<string, string | null> = {};
-    for (const placeholder of placeholders) fallback[placeholder] = null;
-    return fallback;
+    console.error("Error generating chat response:", error);
+    return "I'm sorry, I encountered an error. Please try again.";
   }
 }
 
@@ -606,17 +462,90 @@ At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read mor
       errorMessage.includes("401") ||
       errorMessage.includes("403");
 
-    // if (isAuthError) {
-    //   console.log("[ai] Auth error — using demo data");
-    //   if (input.templateType === "invoice")
-    //     return generateMockInvoiceData(input.userPrompt);
-    //   if (input.templateType === "quotation")
-    //     return generateMockQuotationData(input.userPrompt);
-    //   if (input.templateType === "proposal")
-    //     return generateMockProposalData(input.userPrompt);
-    // }
+    if (isAuthError) {
+      console.log("[ai] Auth error — using demo data");
+      if (input.templateType === "invoice")
+        return generateMockInvoiceData(input.userPrompt);
+      if (input.templateType === "quotation")
+        return generateMockQuotationData(input.userPrompt);
+      if (input.templateType === "proposal")
+        return generateMockProposalData(input.userPrompt);
+    }
 
     throw new Error(`Failed to extract document data: ${errorMessage}`);
+  }
+}
+
+export async function extractPlaceholderValues(
+  placeholders: string[],
+  userInput: string,
+  provider?: LLMProvider,
+): Promise<Record<string, string | null>> {
+  if (!placeholders.length) return {};
+
+  const activeProvider = provider || (await getActiveLLMProvider());
+  const shape: Record<string, z.ZodTypeAny> = {};
+  for (const placeholder of placeholders) {
+    shape[placeholder] = z.union([z.string(), z.number()]).nullable();
+  }
+  const schema = z.object(shape);
+
+  try {
+    if (activeProvider === "qwen") {
+      const object = await generateObjectWithQwen({
+        schema,
+        system: `You extract structured field values from a user's free-text description to fill in a document template.
+You will be given a list of placeholder field names taken verbatim from the template, and the user's text.
+Return a JSON object with exactly those field names as keys.
+- If a value for a field is clearly present or can be reasonably inferred from the user's text, use it.
+- If you cannot confidently determine a field's value, set it to null. Do NOT guess or invent data for fields you are unsure about.
+- Keep values short and plain (no extra commentary).
+- If user not includes dates or id number, set them to reasonable defaults: use today's date for any missing date, and generate a default ID like "INV-001" or "QUO-001" for any missing invoice/quotation/proposal number.
+- Calculate subtotal, tax, and total correctly from items if they are present in the template, and default tax to 0 if not mentioned.`,
+        prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
+      });
+
+      const output: Record<string, string | null> = {};
+      for (const placeholder of placeholders) {
+        const value = (object as Record<string, unknown>)[placeholder];
+        output[placeholder] =
+          value === undefined || value === null
+            ? null
+            : sanitizeExtractedValue(String(value));
+      }
+      return output;
+    }
+
+    const result = await generateObject({
+      model: getModel(activeProvider),
+      maxOutputTokens: 1000,
+      abortSignal: AbortSignal.timeout(45_000),
+      system: `You extract structured field values from a user's free-text description to fill in a document template.
+You will be given a list of placeholder field names taken verbatim from the template, and the user's text.
+Return a JSON object with exactly those field names as keys.
+- If a value for a field is clearly present or can be reasonably inferred from the user's text, use it.
+- If you cannot confidently determine a field's value, set it to null. Do NOT guess or invent data for fields you are unsure about.
+- Keep values short and plain (no extra commentary).
+- If user not includes dates or id number, set them to reasonable defaults: use today's date for any missing date, and generate a default ID like "INV-001" or "QUO-001" for any missing invoice/quotation/proposal number.
+- Calculate subtotal, tax, and total correctly from items if they are present in the template, and default tax to 0 if not mentioned.`,
+      prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
+      schema,
+    });
+
+    const output: Record<string, string | null> = {};
+    for (const placeholder of placeholders) {
+      const value = (result.object as Record<string, unknown>)[placeholder];
+      output[placeholder] =
+        value === undefined || value === null
+          ? null
+          : sanitizeExtractedValue(String(value));
+    }
+    return output;
+  } catch (error) {
+    console.error("[ai] extractPlaceholderValues failed:", error);
+    const fallback: Record<string, string | null> = {};
+    for (const placeholder of placeholders) fallback[placeholder] = null;
+    return fallback;
   }
 }
 
@@ -633,6 +562,83 @@ function sanitizeExtractedValue(value: string): string | null {
   return trimmed.replace(/[,;]\s*$/, "").trim() || null;
 }
 
+export async function getProvidersConfig() {
+  return {
+    providers: [
+      {
+        id: "gemini",
+        name: "Google Gemini",
+        model: "gemini-2.5-flash-lite",
+        requiresKey: true,
+      },
+      {
+        id: "openai",
+        name: "OpenAI GPT-4",
+        model: "gpt-4o-mini",
+        requiresKey: true,
+      },
+      {
+        id: "claude",
+        name: "Anthropic Claude",
+        model: "claude-sonnet-4-5",
+        requiresKey: true,
+      },
+      {
+        id: "qwen",
+        name: "Qwen (Ollama)",
+        model: OLLAMA_MODEL,
+        requiresKey: false,
+      },
+    ],
+    activeProvider: await getActiveLLMProvider(),
+  };
+}
+
+export async function setActiveProvider(provider: LLMProvider) {
+  try {
+    await dbHelpers.setSetting(
+      "active_llm_provider",
+      provider,
+      "Active LLM provider",
+    );
+    return { success: true, provider };
+  } catch (error) {
+    console.error("Error setting active provider:", error);
+    throw error;
+  }
+}
+
+export async function detectTemplateType(
+  userInput: string,
+  provider: LLMProvider = "gemini",
+): Promise<"invoice" | "quotation" | "proposal"> {
+  try {
+    if (provider === "qwen") {
+      const object = await generateObjectWithQwen({
+        schema: z.object({
+          detectedType: z.enum(["invoice", "quotation", "proposal"]),
+        }),
+        system: `Classify: invoice, quotation, proposal. Return JSON only.`,
+        prompt: `"${userInput}"`,
+      });
+      return object.detectedType;
+    }
+
+    const result = await generateObject({
+      model: getModel(provider),
+      system: `Classify: invoice, quotation , proposal.`,
+      prompt: `"${userInput}"`,
+      schema: z.object({
+        detectedType: z.enum(["invoice", "quotation", "proposal"]),
+      }),
+    });
+    return result.object.detectedType;
+  } catch {
+    return detectTemplateTypeHeuristic(userInput);
+  }
+}
+
+// [!] Problem
 function detectTemplateTypeHeuristic(
   userInput: string,
 ): "invoice" | "quotation" | "proposal" {

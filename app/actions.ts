@@ -1,16 +1,21 @@
 "use server";
 
-import { generateDocument } from "@/lib/documents/generator";
+import { generateDocument, generatePDF } from "@/lib/documents/generator";
 import { dbHelpers } from "@/lib/db/mock-db";
+import {
+  uploadDocxTemplate as uploadDocxTemplateAction,
+  uploadPdf as uploadPdfAction,
+  findMatchingTemplates as findMatchingTemplatesAction,
+  fillTemplateFromText as fillTemplateFromTextAction,
+} from "./upload_action";
 import {
   getProvidersConfig,
   setActiveProvider,
   detectTemplateType,
   detectIntent,
   generateChatResponse,
-} from "@/lib/ai";
+} from "@/lib/ai/index";
 
-// ─── Init ──────────────────────────────────────────────────────────────────────
 let initialized = false;
 
 export async function ensureDatabaseInitialized() {
@@ -29,11 +34,10 @@ export async function ensureDatabaseInitialized() {
   return { success: true };
 }
 
-// ─── Document Generation ───────────────────────────────────────────────────────
 export async function generateDocumentAction(input: {
   templateType: "invoice" | "quotation" | "proposal";
   userInput: string;
-  llmProvider?: "gemini" | "openai" | "claude";
+  llmProvider?: "gemini" | "openai" | "claude" | "qwen";
 }) {
   try {
     const result = await generateDocument({
@@ -54,22 +58,19 @@ export async function generateDocumentAction(input: {
   }
 }
 
-// ─── Chat + Document Router ────────────────────────────────────────────────────
 export async function handleUserMessage(
   userMessage: string,
   conversationHistory: Array<{
     role: "user" | "assistant";
     content: string;
   }> = [],
-  llmProvider?: "gemini" | "openai" | "claude",
+  llmProvider?: "gemini" | "openai" | "claude" | "qwen",
 ) {
   try {
     const trimmed = userMessage.trim();
     const lowerTrimmed = trimmed.toLowerCase();
     const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
 
-    // 1. Upgraded robust regex patterns
-    // Catches prefix ($100) and suffix (100$) styles across multiple currency types
     const hasAmount =
       /[\$\u20AC\u00A3]\s?\d+|\d+\s*([\$\u20AC\u00A3]|usd|dollars?|euro|pounds?|qty|pcs|items?)/i.test(
         lowerTrimmed,
@@ -78,7 +79,6 @@ export async function handleUserMessage(
     const hasDocumentKeyword =
       /\b(invoice|quotation|quote|proposal|bill)\b/i.test(lowerTrimmed);
 
-    // Explicit indicators that the user is attempting to modify/update an item list
     const isModifyingExistingDoc =
       /\b(add|change|update|remove|delete|insert|instead of|put|with)\b/i.test(
         lowerTrimmed,
@@ -87,10 +87,8 @@ export async function handleUserMessage(
         lowerTrimmed,
       );
 
-    // 2. Sophisticated Hard Guard Bypass
-    // A message is ONLY obviously a casual chat if it completely lacks numeric data, context clues, and document markers.
     const isObviouslyChat =
-      wordCount <= 3 || // Exceptionally short text
+      wordCount <= 3 ||
       (!hasAmount && !hasDocumentKeyword && !isModifyingExistingDoc);
 
     if (isObviouslyChat) {
@@ -102,13 +100,11 @@ export async function handleUserMessage(
       return { success: true, type: "chat" as const, message: reply };
     }
 
-    // ── Intent detection (runs safely for context/data-rich requests) ──
     const { intent, templateType, confidence } = await detectIntent(
       trimmed,
       llmProvider,
     );
 
-    // If intent analyzer is highly confident it's chat, follow its routing
     if (intent === "chat" && confidence > 0.85) {
       const reply = await generateChatResponse(
         trimmed,
@@ -230,12 +226,64 @@ export async function getProviderSettings() {
   }
 }
 
+export async function detectTemplateTypeAction(
+  userInput: string,
+  provider?: "gemini" | "openai" | "claude" | "qwen",
+) {
+  try {
+    const detectedType = await detectTemplateType(userInput, provider);
+    return { success: true as const, detectedType };
+  } catch (error) {
+    console.error("Error detecting template type:", error);
+    return {
+      success: false as const,
+      detectedType: "invoice" as const,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+export async function generatePdfAction(
+  json: Record<string, any>,
+  templateType: "invoice" | "quotation" | "proposal" = "invoice",
+) {
+  const pdfBuffer = await generatePDF(json, templateType);
+  return pdfBuffer.toString("base64");
+}
+
+export async function uploadDocxTemplate(formData: FormData) {
+  return uploadDocxTemplateAction(formData);
+}
+
+export async function uploadPdf(formData: FormData) {
+  return uploadPdfAction(formData);
+}
+
+export async function findMatchingTemplates(
+  query: string,
+  options?: {
+    templateType?: "invoice" | "quotation" | "proposal" | "generic";
+    limit?: number;
+  },
+) {
+  return findMatchingTemplatesAction(query, options);
+}
+
+export async function fillTemplateFromText(
+  templateId: string,
+  userInput: string,
+  provider?: "gemini" | "openai" | "claude" | "qwen",
+  continuation: boolean = false,
+) {
+  return fillTemplateFromTextAction(templateId, userInput, provider, continuation);
+}
+
 export async function setActiveProviderAction(
-  provider: "gemini" | "openai" | "claude",
+  provider: "gemini" | "openai" | "claude" | "qwen",
 ) {
   try {
     const result = await setActiveProvider(provider);
-    return { success: true, ...result };
+    return result;
   } catch (error) {
     console.error("Error setting active provider:", error);
     return {
@@ -246,7 +294,7 @@ export async function setActiveProviderAction(
 }
 
 export async function saveAPIKey(
-  provider: "gemini" | "openai" | "claude",
+  provider: "gemini" | "openai" | "claude" | "qwen",
   apiKey: string,
 ) {
   try {
@@ -261,23 +309,6 @@ export async function saveAPIKey(
     return {
       success: false,
       error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
-
-export async function detectTemplateTypeAction(
-  userInput: string,
-  provider?: "gemini" | "openai" | "claude",
-) {
-  try {
-    const detectedType = await detectTemplateType(userInput, provider);
-    return { success: true, detectedType };
-  } catch (error) {
-    console.error("Error detecting template type:", error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-      detectedType: "quotation" as const,
     };
   }
 }

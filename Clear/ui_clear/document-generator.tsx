@@ -1,21 +1,31 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { generateDocumentAction, getProviderSettings, detectTemplateTypeAction } from '@/app/actions';
-import { useEffect } from 'react';
+import { useState } from "react";
+import {
+  generateDocumentAction,
+  getProviderSettings,
+  detectTemplateTypeAction,
+} from "@/app/actions";
+import { useEffect } from "react";
 
 interface DocumentGeneratorProps {
   onDocumentGenerated: (document: any) => void;
 }
 
-export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProps) {
-  const [templateType, setTemplateType] = useState<'invoice' | 'quotation' | 'proposal'>('invoice');
-  const [userInput, setUserInput] = useState('');
+export function DocumentGenerator({
+  onDocumentGenerated,
+}: DocumentGeneratorProps) {
+  const [templateType, setTemplateType] = useState<
+    "invoice" | "quotation" | "proposal"
+  >("invoice");
+  const [userInput, setUserInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeProvider, setActiveProvider] = useState<string>('gemini');
+  const [activeProvider, setActiveProvider] = useState<string>("gemini");
   const [autoDetectEnabled, setAutoDetectEnabled] = useState(true);
-  const [suggestedTemplate, setSuggestedTemplate] = useState<'invoice' | 'quotation' | 'proposal' | null>(null);
+  const [suggestedTemplate, setSuggestedTemplate] = useState<
+    "invoice" | "quotation" | "proposal" | null
+  >(null);
   const [isDetecting, setIsDetecting] = useState(false);
 
   useEffect(() => {
@@ -23,11 +33,15 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
     const fetchProvider = async () => {
       try {
         const result = await getProviderSettings();
-        if (result.activeProvider) {
+        if (
+          result.success &&
+          "activeProvider" in result &&
+          result.activeProvider
+        ) {
           setActiveProvider(result.activeProvider);
         }
       } catch (err) {
-        console.error('Error fetching provider:', err);
+        console.error("Error fetching provider:", err);
       }
     };
     fetchProvider();
@@ -35,20 +49,22 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
 
   // Auto-detect template type when user input changes
   const handleUserInputChange = async (value: string) => {
-    
     setUserInput(value);
     setSuggestedTemplate(null);
 
     if (autoDetectEnabled && value.trim().length > 10) {
       setIsDetecting(true);
       try {
-        const result = await detectTemplateTypeAction(value, activeProvider as any);
+        const result = await detectTemplateTypeAction(
+          value,
+          activeProvider as any,
+        );
         if (result.success) {
           setSuggestedTemplate(result.detectedType);
           setTemplateType(result.detectedType);
         }
       } catch (err) {
-        console.error('Error detecting template:', err);
+        console.error("Error detecting template:", err);
       } finally {
         setIsDetecting(false);
       }
@@ -57,7 +73,7 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
 
   const handleGenerateDocument = async () => {
     if (!userInput.trim()) {
-      setError('Please enter some information about the document');
+      setError("Please enter some information about the document");
       return;
     }
 
@@ -65,16 +81,20 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
     setError(null);
 
     try {
-      const result = await generateDocumentAction(templateType, userInput, activeProvider as any);
+      const result = await generateDocumentAction({
+        templateType,
+        userInput,
+        llmProvider: activeProvider as "gemini" | "openai" | "claude" | "qwen",
+      });
 
       if (!result.success) {
-        setError(result.error || 'Failed to generate document');
+        setError(result.error || "Failed to generate document");
         return;
       }
 
       onDocumentGenerated(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      setError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setIsLoading(false);
     }
@@ -83,14 +103,20 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-foreground mb-6">Generate New Document</h2>
+        <h2 className="text-2xl font-bold text-foreground mb-6">
+          Generate New Document
+        </h2>
       </div>
 
       {/* Auto-Detect Toggle */}
       <div className="flex items-center justify-between bg-accent bg-opacity-5 p-4 rounded-lg border border-accent">
         <div>
-          <label className="text-sm font-semibold text-foreground">Auto-Detect Document Type</label>
-          <p className="text-xs text-muted-foreground mt-1">AI will automatically suggest the best template as you type</p>
+          <label className="text-sm font-semibold text-foreground">
+            Auto-Detect Document Type
+          </label>
+          <p className="text-xs text-muted-foreground mt-1">
+            AI will automatically suggest the best template as you type
+          </p>
         </div>
         <button
           onClick={() => {
@@ -99,19 +125,25 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
           }}
           className={`px-4 py-2 rounded-lg font-medium transition-all ${
             autoDetectEnabled
-              ? 'bg-accent text-accent-foreground'
-              : 'bg-muted text-muted-foreground'
+              ? "bg-accent text-accent-foreground"
+              : "bg-muted text-muted-foreground"
           }`}
         >
-          {autoDetectEnabled ? 'On' : 'Off'}
+          {autoDetectEnabled ? "On" : "Off"}
         </button>
       </div>
 
       {/* Template Selection */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <label className="block text-sm font-semibold text-foreground">Document Type</label>
-          {isDetecting && <span className="text-xs text-muted-foreground animate-pulse">Detecting...</span>}
+          <label className="block text-sm font-semibold text-foreground">
+            Document Type
+          </label>
+          {isDetecting && (
+            <span className="text-xs text-muted-foreground animate-pulse">
+              Detecting...
+            </span>
+          )}
           {suggestedTemplate && !isDetecting && (
             <span className="text-xs bg-accent bg-opacity-20 text-accent-foreground px-2 py-1 rounded">
               Suggested: {suggestedTemplate}
@@ -119,7 +151,7 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
           )}
         </div>
         <div className="grid grid-cols-3 gap-4">
-          {['invoice', 'quotation', 'proposal'].map((type) => (
+          {["invoice", "quotation", "proposal"].map((type) => (
             <button
               key={type}
               onClick={() => {
@@ -128,8 +160,8 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
               }}
               className={`p-4 rounded-lg border-2 transition-all font-medium capitalize ${
                 templateType === type
-                  ? 'border-primary bg-primary bg-opacity-10 text-primary'
-                  : 'border-border bg-card text-foreground hover:border-primary hover:bg-opacity-5'
+                  ? "border-primary bg-primary bg-opacity-10 text-primary"
+                  : "border-border bg-card text-foreground hover:border-primary hover:bg-opacity-5"
               }`}
             >
               {type}
@@ -140,11 +172,15 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
 
       {/* User Input */}
       <div className="space-y-3">
-        <label htmlFor="user-input" className="block text-sm font-semibold text-foreground">
+        <label
+          htmlFor="user-input"
+          className="block text-sm font-semibold text-foreground"
+        >
           Information
         </label>
         <p className="text-sm text-muted-foreground">
-          Provide minimal details about the {templateType}. AI will extract and auto-fill the rest.
+          Provide minimal details about the {templateType}. AI will extract and
+          auto-fill the rest.
         </p>
         <textarea
           id="user-input"
@@ -158,9 +194,12 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
       {/* Active Provider Display */}
       <div className="bg-muted bg-opacity-50 p-4 rounded-lg">
         <p className="text-sm text-muted-foreground">
-          <span className="font-semibold">Active Provider:</span> {activeProvider}
+          <span className="font-semibold">Active Provider:</span>{" "}
+          {activeProvider}
         </p>
-        <p className="text-xs text-muted-foreground mt-1">Change provider in Settings</p>
+        <p className="text-xs text-muted-foreground mt-1">
+          Change provider in Settings
+        </p>
       </div>
 
       {/* Error Display */}
@@ -177,12 +216,14 @@ export function DocumentGenerator({ onDocumentGenerated }: DocumentGeneratorProp
         disabled={isLoading}
         className="w-full bg-primary text-primary-foreground font-semibold py-3 rounded-lg hover:bg-opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
       >
-        {isLoading ? 'Generating...' : 'Generate Document'}
+        {isLoading ? "Generating..." : "Generate Document"}
       </button>
 
       {/* Tips */}
       <div className="bg-accent bg-opacity-10 border border-accent p-4 rounded-lg">
-        <h4 className="font-semibold text-foreground text-sm mb-2">Tips for Best Results:</h4>
+        <h4 className="font-semibold text-foreground text-sm mb-2">
+          Tips for Best Results:
+        </h4>
         <ul className="text-sm text-muted-foreground space-y-1">
           <li>• Be specific with amounts, dates, and client names</li>
           <li>• Include key items or services in your description</li>

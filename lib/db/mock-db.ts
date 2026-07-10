@@ -1,184 +1,339 @@
-// Mock in-memory database for development
-// This will be replaced with actual SQLite later
-// For now, we use localStorage on client and memory on server
+import { embed } from "ai";
+import { google } from "@ai-sdk/google";
+import {
+  connectDB,
+  DocxTemplate,
+  GeneratedDocument,
+  IDocxTemplate,
+  IGeneratedDocumentRecord,
+  IMemoryRecord,
+  ISettingRecord,
+  MemoryRecord,
+  SettingRecord,
+  TemplateType,
+  DocxTemplateMemory,
+} from "@/lib/mongodb";
+import { ollamaClient as ollama } from "@/lib/ai/ollama-client";
 
-interface Memory {
-  id: number;
-  key: string;
-  content: string;
-  description?: string;
-  createdAt: string;
-  updatedAt: string;
+function getEmbeddingModel() {
+  return google.embeddingModel("gemini-embedding-001");
 }
 
-interface Setting {
-  id: number;
-  key: string;
-  value: string;
-  description?: string;
-  createdAt: string;
-  updatedAt: string;
+function cosineSimilarity(left: number[], right: number[]) {
+  if (!left.length || !right.length || left.length !== right.length) return 0;
+
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftMagnitude += left[index] * left[index];
+    rightMagnitude += right[index] * right[index];
+  }
+
+  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
 }
 
-interface GeneratedDocument {
-  id: number;
-  templateId: number;
-  userInput: string;
-  extractedJson: string;
-  generatedHtml: string;
-  fileName: string;
-  createdAt: string;
+function normalizeMongoRecord<T>(record: T): T {
+  return JSON.parse(JSON.stringify(record));
 }
 
-class MockDatabase {
-  private memories: Map<string, Memory> = new Map();
-  private settings: Map<string, Setting> = new Map();
-  private documents: GeneratedDocument[] = [];
-  private nextId = { memory: 1, setting: 1, document: 1 };
+function normalizeEmbeddingVector(value: unknown): number[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
 
-  // Initialize with default settings
-  constructor() {
-    this.initializeDefaults();
+  if (typeof value[0] === "number") {
+    return (value as number[]).filter((item) => Number.isFinite(item));
   }
 
-  private initializeDefaults() {
-    this.setSetting('active_llm_provider', 'gemini', 'Active LLM provider');
+  if (Array.isArray(value[0])) {
+    const nested = value[0] as unknown[];
+    return nested
+      .filter((item): item is number => typeof item === "number")
+      .filter((item) => Number.isFinite(item));
   }
 
-  // Memory operations
-  getMemory(key: string): Memory | null {
-    return this.memories.get(key) || null;
+  return [];
+}
+
+function tokenizeSearchText(value: string): string[] {
+  return (value.toLowerCase().match(/[a-z0-9]+/g) || []).filter(
+    (token) => token.length >= 3,
+  );
+}
+
+function lexicalSimilarityScore(
+  queryText: string,
+  candidateText: string,
+): number {
+  const queryTokens = new Set(tokenizeSearchText(queryText));
+  const candidateTokens = new Set(tokenizeSearchText(candidateText));
+
+  if (!queryTokens.size || !candidateTokens.size) return 0;
+
+  let overlapCount = 0;
+  for (const token of queryTokens) {
+    if (candidateTokens.has(token)) overlapCount += 1;
   }
 
-  getAllMemories(): Memory[] {
-    return Array.from(this.memories.values());
+  return overlapCount / Math.sqrt(queryTokens.size * candidateTokens.size);
+}
+
+function buildFallbackEmbedding(text: string, dimensions = 256) {
+  const embedding = new Array<number>(dimensions).fill(0);
+  const tokens = text.toLowerCase().match(/[a-z0-9]+/g) || [];
+
+  for (const token of tokens) {
+    let hash = 0;
+    for (let index = 0; index < token.length; index += 1) {
+      hash = (hash * 31 + token.charCodeAt(index)) >>> 0;
+    }
+    embedding[hash % dimensions] += 1;
   }
 
-  setMemory(key: string, content: any, description?: string): Memory {
-    const existing = this.memories.get(key);
-    const now = new Date().toISOString();
+  const magnitude = Math.sqrt(
+    embedding.reduce((sum, value) => sum + value * value, 0),
+  );
+  return magnitude > 0
+    ? embedding.map((value) => value / magnitude)
+    : embedding;
+}
 
-    if (existing) {
-      existing.content = JSON.stringify(content);
-      existing.description = description;
-      existing.updatedAt = now;
-      return existing;
+export async function buildEmbedding(
+  text: string,
+  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" = "RETRIEVAL_DOCUMENT",
+): Promise<number[]> {
+  const normalizedText = text.trim();
+  if (!normalizedText) return [] as number[];
+
+  try {
+    const result = await ollama.embed({
+      model: process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text",
+      input: normalizedText.slice(0, 8000),
+    });
+    // const result = await embed({
+    //   model: getEmbeddingModel(),
+    //   value: normalizedText.slice(0, 8000),
+    //   providerOptions: {
+    //     google: {
+    //       taskType,
+    //     },
+    //   },
+    // });
+
+    const embedding = normalizeEmbeddingVector(result.embeddings);
+
+    if (!embedding.length) {
+      throw new Error("Ollama embedding response did not include a vector");
     }
 
-    const memory: Memory = {
-      id: this.nextId.memory++,
-      key,
-      content: JSON.stringify(content),
-      description,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.memories.set(key, memory);
-    return memory;
-  }
-
-  deleteMemory(key: string): boolean {
-    return this.memories.delete(key);
-  }
-
-  // Setting operations
-  getSetting(key: string): Setting | null {
-    return this.settings.get(key) || null;
-  }
-
-  getAllSettings(): Setting[] {
-    return Array.from(this.settings.values());
-  }
-
-  setSetting(key: string, value: string, description?: string): Setting {
-    const existing = this.settings.get(key);
-    const now = new Date().toISOString();
-
-    if (existing) {
-      existing.value = value;
-      existing.description = description;
-      existing.updatedAt = now;
-      return existing;
-    }
-
-    const setting: Setting = {
-      id: this.nextId.setting++,
-      key,
-      value,
-      description,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.settings.set(key, setting);
-    return setting;
-  }
-
-  deleteSetting(key: string): boolean {
-    return this.settings.delete(key);
-  }
-
-  // Document operations
-  saveDocument(doc: Omit<GeneratedDocument, 'id' | 'createdAt'>): GeneratedDocument {
-    const now = new Date().toISOString();
-    const newDoc: GeneratedDocument = {
-      ...doc,
-      id: this.nextId.document++,
-      createdAt: now,
-    };
-
-    this.documents.push(newDoc);
-    return newDoc;
-  }
-
-  getDocuments(): GeneratedDocument[] {
-    return this.documents;
+    console.log(`[v0] Embedding generated with ${embedding.length} dimensions`);
+    return embedding;
+  } catch (error) {
+    console.error(
+      "[v0] Embedding generation failed, using fallback vector:",
+      error,
+    );
+    return buildFallbackEmbedding(normalizedText);
   }
 }
 
-// Create singleton instance
-export const mockDb = new MockDatabase();
+async function toPlainTemplate(template: any): Promise<IDocxTemplate> {
+  return normalizeMongoRecord(
+    template.toObject ? template.toObject() : template,
+  );
+}
 
-// Export helper functions that mimic async operations
 export const dbHelpers = {
   async getMemories() {
-    return mockDb.getAllMemories();
+    await connectDB();
+    return MemoryRecord.find({}).sort({ updatedAt: -1 }).lean();
   },
 
   async getMemory(key: string) {
-    return mockDb.getMemory(key);
+    await connectDB();
+    return MemoryRecord.findOne({ key }).lean();
   },
 
   async saveMemory(key: string, content: any, description?: string) {
-    return mockDb.setMemory(key, content, description);
+    await connectDB();
+    const serializedContent = JSON.stringify(content);
+    const record = await MemoryRecord.findOneAndUpdate(
+      { key },
+      { key, content: serializedContent, description },
+      { upsert: true, new: true },
+    );
+    return normalizeMongoRecord(record?.toObject?.() ?? record);
   },
 
   async deleteMemory(key: string) {
-    return mockDb.deleteMemory(key);
+    await connectDB();
+    return MemoryRecord.deleteOne({ key });
   },
 
   async getSetting(key: string) {
-    return mockDb.getSetting(key);
+    await connectDB();
+    return SettingRecord.findOne({ key }).lean();
   },
 
   async getAllSettings() {
-    return mockDb.getAllSettings();
+    await connectDB();
+    return SettingRecord.find({}).sort({ updatedAt: -1 }).lean();
   },
 
   async setSetting(key: string, value: string, description?: string) {
-    return mockDb.setSetting(key, value, description);
+    await connectDB();
+    const record = await SettingRecord.findOneAndUpdate(
+      { key },
+      { key, value, description },
+      { upsert: true, new: true },
+    );
+    return normalizeMongoRecord(record?.toObject?.() ?? record);
   },
 
   async deleteSetting(key: string) {
-    return mockDb.deleteSetting(key);
+    await connectDB();
+    return SettingRecord.deleteOne({ key });
   },
 
-  async saveDocument(doc: Omit<GeneratedDocument, 'id' | 'createdAt'>) {
-    return mockDb.saveDocument(doc);
+  async saveDocument(
+    doc: Omit<IGeneratedDocumentRecord, "createdAt" | "updatedAt">,
+  ) {
+    await connectDB();
+    const record = await GeneratedDocument.create(doc);
+    return normalizeMongoRecord(record.toObject());
   },
 
   async getDocuments() {
-    return mockDb.getDocuments();
+    await connectDB();
+    return GeneratedDocument.find({}).sort({ updatedAt: -1 }).lean();
+  },
+
+  async saveTemplate(input: {
+    filename: string;
+    fileContent: string;
+    templateType: TemplateType;
+    extractedText: string;
+    placeholders: string[];
+    placeholderSchema: Array<{ name: string; required?: boolean }>;
+    analysis?: string;
+    embeddingText: string;
+    embedding: number[];
+    status?: "pending" | "ready" | "failed";
+    source?: "upload" | "seed";
+  }) {
+    await connectDB();
+    const record = await DocxTemplate.create({
+      ...input,
+      status: input.status ?? "ready",
+      source: input.source ?? "upload",
+    });
+    return toPlainTemplate(record);
+  },
+
+  async getStoredTemplates(templateType?: TemplateType) {
+    await connectDB();
+    const query =
+      templateType && templateType !== "generic" ? { templateType } : {};
+    return DocxTemplate.find(query).sort({ updatedAt: -1 }).lean();
+  },
+
+  async findBestTemplate(queryText: string, templateType?: TemplateType) {
+    const [best] = await dbHelpers.findTopTemplates(queryText, {
+      templateType,
+      limit: 1,
+    });
+    return best?.template ?? null;
+  },
+
+  async findTopTemplates(
+    queryText: string,
+    options: { templateType?: TemplateType; limit?: number } = {},
+  ): Promise<Array<{ template: IDocxTemplate; score: number }>> {
+    await connectDB();
+    const limit = options.limit && options.limit > 0 ? options.limit : 5;
+
+    const readyQuery: Record<string, any> = { status: "ready" };
+    if (options.templateType && options.templateType !== "generic") {
+      readyQuery.templateType = options.templateType;
+    }
+    console.log(
+      `[v0] Searching for templates matching "${queryText}" with type ...`,
+    );
+
+    const candidates = await DocxTemplate.find(readyQuery)
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    if (!candidates.length) return [];
+
+    const trimmedQuery = queryText.trim();
+    const queryEmbedding = trimmedQuery
+      ? await buildEmbedding(trimmedQuery, "RETRIEVAL_QUERY")
+      : [];
+
+    const scored = candidates.map((candidate) => {
+      const candidateEmbedding = normalizeEmbeddingVector(candidate.embedding);
+      const canUseVectorSimilarity =
+        queryEmbedding.length > 0 &&
+        candidateEmbedding.length > 0 &&
+        candidateEmbedding.length === queryEmbedding.length;
+
+      const vectorSimilarity = canUseVectorSimilarity
+        ? cosineSimilarity(candidateEmbedding, queryEmbedding)
+        : 0;
+
+      const lexicalSimilarity = trimmedQuery
+        ? lexicalSimilarityScore(
+            trimmedQuery,
+            [
+              candidate.filename,
+              candidate.templateType,
+              candidate.embeddingText,
+              candidate.analysis,
+              candidate.extractedText?.slice(0, 1000),
+              candidate.placeholders?.join(" "),
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          )
+        : 0;
+
+      const keywordBonus = candidate.placeholders?.some((placeholder: string) =>
+        trimmedQuery.toLowerCase().includes(placeholder.toLowerCase()),
+      )
+        ? 0.15
+        : 0;
+
+      const similarity = canUseVectorSimilarity
+        ? vectorSimilarity + lexicalSimilarity * 0.2
+        : lexicalSimilarity;
+
+      return {
+        template: normalizeMongoRecord(candidate) as IDocxTemplate,
+        score: similarity + keywordBonus,
+      };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit);
+  },
+
+  async findTemplatesByText(query: string) {
+    await connectDB();
+    return DocxTemplate.find({
+      $or: [
+        { filename: { $regex: query, $options: "i" } },
+        { extractedText: { $regex: query, $options: "i" } },
+        { placeholders: { $regex: query, $options: "i" } },
+      ],
+    })
+      .sort({ updatedAt: -1 })
+      .lean();
+  },
+
+  async saveTemplateEmbedding(templateId: string, embedding: number[]) {
+    await connectDB();
+    return DocxTemplate.updateOne({ _id: templateId }, { $set: { embedding } });
   },
 };
