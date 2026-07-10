@@ -21,14 +21,17 @@ export default function UploadPage() {
     null,
   );
   const [templates, setTemplates] = useState<UploadPageProps[]>([]);
+  const [Success, setSuccess] = useState(false);
 
   useEffect(() => {
+    console.log("Last upload type changed:", lastUploadType);
     showallTemplatesAction().then((result) => {
       if (result.success && result.data) {
         setTemplates(result.data);
       }
     });
-  }, [lastUploadType]);
+    setSuccess(false);
+  }, [Success]);
 
   async function handleDeleteTemplate(templateId: string) {
     if (templates.length > 0) {
@@ -93,7 +96,10 @@ export default function UploadPage() {
               type="docx"
               title="DOCX Template"
               description="Upload a DOC or DOCX template for placeholder extraction and analysis."
-              onUploadSuccess={() => setLastUploadType("docx")}
+              onUploadSuccess={() => {
+                setLastUploadType("docx");
+                setSuccess(true);
+              }}
             />
           </div>
 
