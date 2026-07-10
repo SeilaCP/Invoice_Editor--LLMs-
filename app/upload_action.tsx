@@ -392,6 +392,38 @@ export interface FillTemplateResult {
   isComplete: boolean;
 }
 
+export async function showallTemplatesAction(): Promise<{
+  success: boolean;
+  data?: Array<any>;
+  error?: string;
+}> {
+  try {
+    await connectDB();
+    const templates = await DocxTemplate.find().lean();
+    const safeTemplates = JSON.parse(JSON.stringify(templates));
+    return { success: true, data: safeTemplates };
+  } catch (error) {
+    console.error("[v0] showallTemplatesAction error:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+export async function deleteTemplateAction(templateId: string) {
+  if (typeof templateId !== "string" || !OBJECT_ID_PATTERN.test(templateId)) {
+    throw new Error("A valid templateId is required");
+  }
+  try {
+    await connectDB();
+    await DocxTemplate.deleteOne({ _id: templateId });
+  } catch (error) {
+    console.error("[v0] deleteTemplateAction error:", error);
+    throw new Error(error instanceof Error ? error.message : "Unknown error");
+  }
+}
+
 export async function fillTemplateFromText(
   templateId: string,
   userInput: string,

@@ -1,18 +1,53 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { UploadSection } from "@/lib/upload/upload_section";
-import { ensureDatabaseInitialized } from "../upload_action";
+import {
+  ensureDatabaseInitialized,
+  deleteTemplateAction,
+  showallTemplatesAction,
+} from "../upload_action";
+
+interface UploadPageProps {
+  _id: string;
+  files: File[];
+  filename: string;
+  analysis: string;
+}
 
 export default function UploadPage() {
   const [lastUploadType, setLastUploadType] = useState<"docx" | "pdf" | null>(
     null,
   );
+  const [templates, setTemplates] = useState<UploadPageProps[]>([]);
+
+  useEffect(() => {
+    showallTemplatesAction().then((result) => {
+      if (result.success && result.data) {
+        setTemplates(result.data);
+      }
+    });
+  }, [lastUploadType]);
+
+  async function handleDeleteTemplate(templateId: string) {
+    if (templates.length > 0) {
+      await deleteTemplateAction(templateId);
+      const updatedTemplates = templates.filter(
+        (template) => template._id !== templateId,
+      );
+      setTemplates(updatedTemplates);
+    }
+  }
 
   useEffect(() => {
     ensureDatabaseInitialized().catch((error) => {
       console.error("Failed to initialize database:", error);
+    });
+    showallTemplatesAction().then((result) => {
+      if (result.success && result.data) {
+        setTemplates(result.data);
+      }
     });
   }, []);
 
@@ -70,6 +105,36 @@ export default function UploadPage() {
               onUploadSuccess={() => setLastUploadType("pdf")}
             />
           </div>
+        </div>
+      </div>
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mb-6 flex items-center justify-between gap-4 rounded-3xl border border-border bg-background/80 px-5 py-4 shadow-sm backdrop-blur">
+          {templates.length > 0 ? (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+                Available Templates
+              </p>
+              <ul className="mt-2 space-y-2">
+                {templates.map((template) => (
+                  <li key={template._id} className="text-sm text-foreground">
+                    <p>
+                      {template.filename} - {template.analysis}
+                    </p>
+                    <button
+                      onClick={() => handleDeleteTemplate(template._id)}
+                      className="ml-2 rounded bg-red-500 px-2 py-1 text-xs text-white hover:bg-red-600"
+                    >
+                      Delete
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
+              No templates available
+            </p>
+          )}
         </div>
       </div>
     </main>
