@@ -273,8 +273,9 @@ export async function fillTemplateFromText(
   templateId: string,
   userInput: string,
   provider?: "gemini" | "openai" | "claude" | "qwen",
+  continuation: boolean = false,
 ) {
-  return fillTemplateFromTextAction(templateId, userInput, provider);
+  return fillTemplateFromTextAction(templateId, userInput, provider, continuation);
 }
 
 export async function setActiveProviderAction(

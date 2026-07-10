@@ -92,11 +92,11 @@ export function TemplateChatDashboard() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const docxPreviewRef = useRef<HTMLDivElement>(null);
-  const [printMsg, setPrintMsg] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const dragRef = useRef<HTMLDivElement>(null);
+  // Id of the in-progress fill session (persisted metadata of which
+  // placeholders are already filled vs. still missing). Once set, subsequent
+  // sends are treated as continuations that only need to supply the
+  // remaining missing values.
+  const [fillSessionId, setFillSessionId] = useState<string | null>(null);
 
   const [lastUploadType, setLastUploadType] = useState<"docx" | "pdf" | null>(
     null,
@@ -172,6 +172,7 @@ export function TemplateChatDashboard() {
     if (!match) return;
 
     setSelectedTemplate(match);
+    setFillSessionId(null);
     setMessages((prev) => [
       ...prev,
       {
@@ -185,6 +186,7 @@ export function TemplateChatDashboard() {
 
   const handleNewSearch = () => {
     setSelectedTemplate(null);
+    setFillSessionId(null);
     setPreviewUrl(null);
     setPreviewError(null);
     setMessages((prev) => [
@@ -214,7 +216,6 @@ export function TemplateChatDashboard() {
 
     try {
       if (!selectedTemplate) {
-        // ── Search mode ──
         const result = await findMatchingTemplates(text, { limit: 5 });
         if (!result.success) {
           setMessages((prev) => [
@@ -252,10 +253,14 @@ export function TemplateChatDashboard() {
           ]);
         }
       } else {
+        const isContinuation = fillSessionId !== null;
         const result = await fillTemplateFromText(
-          selectedTemplate.templateId,
+          isContinuation ? fillSessionId! : selectedTemplate.templateId,
           text,
+          undefined,
+          isContinuation,
         );
+
         if (!result.success || !result.data) {
           setMessages((prev) => [
             ...prev,
@@ -267,13 +272,17 @@ export function TemplateChatDashboard() {
             },
           ]);
         } else {
+          setFillSessionId(result.data.fillSessionId);
+          const statusMessage = result.data.isComplete
+            ? `Filled "${selectedTemplate.filename}" — all fields are complete! Review below.`
+            : `Filled "${selectedTemplate.filename}" so far. Still missing: ${result.data.unfilledPlaceholders.join(", ")}. Tell me those values and I'll keep filling this document.`;
           setMessages((prev) => [
             ...prev,
             {
               id: (Date.now() + 1).toString(),
               role: "assistant",
               type: "fill",
-              content: `Filled "${selectedTemplate.filename}" — review the extracted fields below.`,
+              content: statusMessage,
               fillResult: result.data,
             },
           ]);

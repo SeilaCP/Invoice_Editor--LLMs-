@@ -17,11 +17,13 @@ import {
   IPdfDocument,
   TemplateType,
   DocxTemplate,
+  DocxTemplateMemory,
 } from "@/lib/mongodb";
 import { buildEmbedding, dbHelpers } from "@/lib/db/mock-db";
 import { MAX_UPLOAD_SIZE_BYTES, formatBytes } from "@/lib/upload/constraints";
 import { generateDocxFromTemplate } from "@/lib/documents/docx-generator";
 import { extractPlaceholderValues } from "@/lib/ai";
+import error from "next/dist/api/error";
 
 type LLMProvider = "gemini" | "openai" | "claude" | "qwen";
 
@@ -379,7 +381,6 @@ export async function findMatchingTemplates(
   }
 }
 
-// ─── Fill Template From Free Text (Phase 5) ────────────────────────────────────
 const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i;
 
 export interface FillTemplateResult {
@@ -387,20 +388,30 @@ export interface FillTemplateResult {
   fileBase64: string;
   fields: Record<string, string | null>;
   unfilledPlaceholders: string[];
+  fillSessionId: string;
+  isComplete: boolean;
 }
 
 export async function fillTemplateFromText(
   templateId: string,
   userInput: string,
   provider?: "gemini" | "openai" | "claude" | "qwen",
+  continuation: boolean = false,
 ): Promise<{
   success: boolean;
   data?: FillTemplateResult;
   error?: string;
 }> {
   try {
+    await connectDB();
+
     if (typeof templateId !== "string" || !OBJECT_ID_PATTERN.test(templateId)) {
-      return { success: false, error: "A valid templateId is required" };
+      return {
+        success: false,
+        error: continuation
+          ? "A valid fillSessionId is required"
+          : "A valid templateId is required",
+      };
     }
 
     const trimmedInput = typeof userInput === "string" ? userInput.trim() : "";
@@ -414,47 +425,89 @@ export async function fillTemplateFromText(
       };
     }
 
-    await connectDB();
+    let memory;
+    let placeholders: string[];
+    let previousFields: Record<string, string | null>;
 
-    const template = await DocxTemplate.findById(templateId).lean();
-    if (!template) {
-      return { success: false, error: "Template not found" };
-    }
-    if (template.status !== "ready" || !template.fileContent) {
-      return {
-        success: false,
-        error:
-          "Template is not ready to be filled (missing content or embedding)",
-      };
-    }
-    if (!template.placeholders?.length) {
-      return {
-        success: false,
-        error: "This template has no detected placeholders to fill",
-      };
+    if (continuation) {
+      memory = await DocxTemplateMemory.findById(templateId);
+      if (!memory) {
+        return {
+          success: false,
+          error:
+            "Continuation requested but no previous fill session was found for this id",
+        };
+      }
+      placeholders = memory.placeholders;
+      previousFields = (memory.fields as Record<string, string | null>) ?? {};
+    } else {
+      const template = await DocxTemplate.findById(templateId).lean();
+      if (!template) {
+        return { success: false, error: "Template not found" };
+      }
+      if (template.status !== "ready" || !template.fileContent) {
+        return {
+          success: false,
+          error:
+            "Template is not ready to be filled (missing content or embedding)",
+        };
+      }
+      if (!template.placeholders?.length) {
+        return {
+          success: false,
+          error: "This template has no detected placeholders to fill",
+        };
+      }
+
+      placeholders = template.placeholders;
+      previousFields = {};
+      memory = await DocxTemplateMemory.create({
+        sourceTemplateId: templateId,
+        filename: template.filename,
+        fileContent: template.fileContent,
+        templateType: template.templateType,
+        placeholders,
+        fields: {},
+        unfilledPlaceholders: placeholders,
+        status: "in_progress",
+      });
     }
 
-    const fields = await extractPlaceholderValues(
-      template.placeholders,
+    const extracted = await extractPlaceholderValues(
+      placeholders,
       trimmedInput,
       provider,
     );
+    const mergedFields: Record<string, string | null> = {};
+    for (const placeholder of placeholders) {
+      const newValue = extracted[placeholder];
+      mergedFields[placeholder] =
+        newValue !== null && newValue !== undefined
+          ? newValue
+          : (previousFields[placeholder] ?? null);
+    }
 
-    const unfilledPlaceholders = template.placeholders.filter(
-      (placeholder: string) => fields[placeholder] === null,
+    const unfilledPlaceholders = placeholders.filter(
+      (placeholder) => mergedFields[placeholder] === null,
     );
+    const isComplete = unfilledPlaceholders.length === 0;
+
+    memory.fields = mergedFields;
+    memory.unfilledPlaceholders = unfilledPlaceholders;
+    memory.status = isComplete ? "completed" : "in_progress";
+    await memory.save();
 
     const renderData: Record<string, string> = {};
-    for (const placeholder of template.placeholders) {
-      renderData[placeholder] = fields[placeholder] ?? "";
+    for (const placeholder of placeholders) {
+      renderData[placeholder] = mergedFields[placeholder] ?? "";
     }
 
     const filledBuffer = await generateDocxFromTemplate(
-      template.fileContent,
+      memory.fileContent,
       renderData,
     );
 
-    const baseName = template.filename.replace(/\.(docx?|DOCX?)$/, "");
+    const baseName = memory.filename.replace(/\.(docx?|DOCX?)$/, "");
     const fileName = `${baseName}-filled-${Date.now()}.docx`;
 
     return {
@@ -462,8 +515,10 @@ export async function fillTemplateFromText(
       data: {
         fileName,
         fileBase64: filledBuffer.toString("base64"),
-        fields,
+        fields: mergedFields,
         unfilledPlaceholders,
+        fillSessionId: String(memory._id),
+        isComplete,
       },
     };
   } catch (error) {

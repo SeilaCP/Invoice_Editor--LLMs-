@@ -11,6 +11,7 @@ import {
   MemoryRecord,
   SettingRecord,
   TemplateType,
+  DocxTemplateMemory,
 } from "@/lib/mongodb";
 import { ollamaClient as ollama } from "@/lib/ai/ollama-client";
 

@@ -32,6 +32,26 @@ export interface IDocxTemplate {
   updatedAt: Date;
 }
 
+// A fill session: created the first time a user starts filling a
+// DocxTemplate, and updated on every follow-up prompt (continuation=true).
+// It tracks which placeholders have been filled so far and which are still
+// missing, so later prompts only need to supply the missing information.
+export type FillSessionStatus = "in_progress" | "completed";
+
+export interface IDocxTemplateMemory {
+  _id?: any;
+  sourceTemplateId: string;
+  filename: string;
+  fileContent: string;
+  templateType: TemplateType;
+  placeholders: string[];
+  fields: Record<string, string | null>;
+  unfilledPlaceholders: string[];
+  status: FillSessionStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const placeholderItemSchema = new Schema(
   {
     name: { type: String, required: true },
@@ -103,6 +123,24 @@ const docxTemplateSchema = new Schema<IDocxTemplate>(
   { timestamps: true },
 );
 
+const docxTemplateSchemaMemory = new Schema<IDocxTemplateMemory>(
+  {
+    sourceTemplateId: { type: String, required: true, index: true },
+    filename: { type: String, required: true },
+    fileContent: { type: String, required: true },
+    templateType: { type: String, required: true, default: "generic" },
+    placeholders: { type: [String], default: [] },
+    fields: { type: Schema.Types.Mixed, default: {} },
+    unfilledPlaceholders: { type: [String], default: [] },
+    status: {
+      type: String,
+      enum: ["in_progress", "completed"],
+      default: "in_progress",
+    },
+  },
+  { timestamps: true },
+);
+
 const pdfDocumentSchema = new Schema<IPdfDocument>(
   {
     filename: { type: String, required: true },
@@ -155,6 +193,13 @@ export const DocxTemplate =
 export const PdfDocument =
   mongoose.models.PdfDocument ||
   mongoose.model<IPdfDocument>("PdfDocument", pdfDocumentSchema);
+
+export const DocxTemplateMemory =
+  mongoose.models.DocxTemplateMemory ||
+  mongoose.model<IDocxTemplateMemory>(
+    "DocxTemplateMemory",
+    docxTemplateSchemaMemory,
+  );
 
 export const MemoryRecord =
   mongoose.models.MemoryRecord ||
