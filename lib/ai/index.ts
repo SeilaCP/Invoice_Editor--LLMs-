@@ -360,15 +360,21 @@ export async function extractPlaceholderValues(
 
   const activeProvider = provider || (await getActiveLLMProvider());
   const shape: Record<string, z.ZodTypeAny> = {};
+  const qwenShape: Record<string, z.ZodTypeAny> = {};
   for (const placeholder of placeholders) {
-    shape[placeholder] = z.union([z.string(), z.number()]).nullable();
+    shape[placeholder] = z
+      .union([z.string(), z.number()])
+      .nullable()
+      .optional();
+    qwenShape[placeholder] = z.unknown().optional().nullable();
   }
   const schema = z.object(shape);
+  const qwenSchema = z.object(qwenShape);
 
   try {
     if (activeProvider === "qwen") {
       const object = await generateObjectWithQwen({
-        schema,
+        schema: qwenSchema,
         system: `You are a Document Field Extraction Agent. Your job is to read a user's free-text description of an invoice, quotation, or proposal and extract structured data to fill a document template.
 
 You will receive:
@@ -428,18 +434,17 @@ Recognize synonyms across formats:
 - Keys must exactly match the provided field name list (verbatim, same casing/spacing).
 - Values must be short, plain strings/numbers — no extra formatting, no currency symbols embedded unless the field name asks for a formatted string.
 - Numbers should be plain numbers (not strings) unless the field is explicitly a "formatted" text field.
-- If a field name implies a nested structure (e.g. "items"), return it as a JSON array of objects with consistent sub-keys (description, quantity, unit_price, line_total).
-- Never include fields not in the provided list, even if you extracted extra info.`,
+- Return a single scalar value for each placeholder. Never return a JSON object or array for a placeholder value.
+- If a placeholder looks like a numbered line-item cell (for example "Item 1", "Item 2", "Item 3"), return only the item description text for that cell.
+- Never include fields not in the provided list, even if you extracted extra info.
+`,
         prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
       });
 
       const output: Record<string, string | null> = {};
       for (const placeholder of placeholders) {
         const value = (object as Record<string, unknown>)[placeholder];
-        output[placeholder] =
-          value === undefined || value === null
-            ? null
-            : sanitizeExtractedValue(String(value));
+        output[placeholder] = normalizeExtractedValue(value);
       }
       console.log("[ai] extractPlaceholderValues (Qwen) output:", output);
       return output;
@@ -464,10 +469,7 @@ Return a JSON object with exactly those field names as keys.
     const output: Record<string, string | null> = {};
     for (const placeholder of placeholders) {
       const value = (result.object as Record<string, unknown>)[placeholder];
-      output[placeholder] =
-        value === undefined || value === null
-          ? null
-          : sanitizeExtractedValue(String(value));
+      output[placeholder] = normalizeExtractedValue(value);
     }
     return output;
   } catch (error) {
@@ -685,6 +687,53 @@ function sanitizeExtractedValue(value: string): string | null {
     return null;
   }
   return trimmed.replace(/[,;]\s*$/, "").trim() || null;
+}
+
+function normalizeExtractedValue(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return sanitizeExtractedValue(String(value));
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const normalized = normalizeExtractedValue(item);
+      if (normalized) return normalized;
+    }
+    return null;
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const preferredKeys = [
+      "description",
+      "name",
+      "label",
+      "title",
+      "value",
+      "text",
+      "content",
+      "item",
+    ];
+
+    for (const key of preferredKeys) {
+      const normalized = normalizeExtractedValue(record[key]);
+      if (normalized) return normalized;
+    }
+
+    for (const nestedValue of Object.values(record)) {
+      const normalized = normalizeExtractedValue(nestedValue);
+      if (normalized) return normalized;
+    }
+  }
+
+  return null;
 }
 
 function detectTemplateTypeHeuristic(
