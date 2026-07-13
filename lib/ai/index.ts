@@ -429,12 +429,7 @@ Recognize synonyms across formats:
 - Values must be short, plain strings/numbers — no extra formatting, no currency symbols embedded unless the field name asks for a formatted string.
 - Numbers should be plain numbers (not strings) unless the field is explicitly a "formatted" text field.
 - If a field name implies a nested structure (e.g. "items"), return it as a JSON array of objects with consistent sub-keys (description, quantity, unit_price, line_total).
-- Never include fields not in the provided list, even if you extracted extra info.
-
-[CONFIDENCE DISCIPLINE]
-- Silence on a detail = null, not invention.
-- Only apply the explicit defaults listed above — never extend "reasonable defaults" to names, addresses, prices, item descriptions, or currency.
-- If the user's text is contradictory (e.g. states two different totals), prefer the more specific/detailed figure; if a "notes" field exists you may briefly flag the discrepancy there, otherwise leave it unflagged rather than guessing.`,
+- Never include fields not in the provided list, even if you extracted extra info.`,
         prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
       });
 
@@ -446,6 +441,7 @@ Recognize synonyms across formats:
             ? null
             : sanitizeExtractedValue(String(value));
       }
+      console.log("[ai] extractPlaceholderValues (Qwen) output:", output);
       return output;
     }
 
