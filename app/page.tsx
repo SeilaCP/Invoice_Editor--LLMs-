@@ -19,7 +19,7 @@ const cards = [
 
 export default function Page() {
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.92),_rgba(241,245,249,1)_45%,_rgba(226,232,240,1)_100%)] text-foreground">
+    <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col justify-center px-6 py-16">
         <div className="mb-10 max-w-2xl">
           <p className="mb-4 text-sm font-semibold uppercase tracking-[0.24em] text-muted-foreground">

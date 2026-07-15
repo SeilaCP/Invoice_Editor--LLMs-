@@ -92,16 +92,15 @@ export function TemplateChatDashboard() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const docxPreviewRef = useRef<HTMLDivElement>(null);
-  // Id of the in-progress fill session (persisted metadata of which
-  // placeholders are already filled vs. still missing). Once set, subsequent
-  // sends are treated as continuations that only need to supply the
-  // remaining missing values.
   const [fillSessionId, setFillSessionId] = useState<string | null>(null);
 
   const [lastUploadType, setLastUploadType] = useState<"docx" | "pdf" | null>(
     null,
   );
   const type = lastUploadType === "docx" ? "docx" : "pdf";
+
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -324,6 +323,19 @@ export function TemplateChatDashboard() {
           </div>
         </div>
       </div>
+      <div className="px-6 py-4 border-b border-border bg-background/90">
+        {error && (
+          <div className="fix mt-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+            {error}
+          </div>
+        )}
+
+        {success && (
+          <div className="fix mt-4 p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+            File uploaded successfully!
+          </div>
+        )}
+      </div>
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-5xl mx-auto space-y-6">
           {messages.map((msg) => (
@@ -504,25 +516,12 @@ export function TemplateChatDashboard() {
       <div className="border-t border-border px-4 py-4 bg-background">
         <div className="max-w-2xl mx-auto">
           <div className="flex gap-3 items-end">
-            {/* <input
-              type="file"
-              accept={type === "docx" ? ".doc,.docx" : ".pdf"}
-              hidden
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-xl bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-all"
-            >
-              <Paperclip size={18} />
-            </button> */}
-
             <UploadSection
               type="docx"
               title="Upload DOCX Template"
               description="Upload your DOCX template file here."
+              setSuccess={setSuccess}
+              setError={setError}
               onUploadSuccess={() => setLastUploadType("docx")}
             />
 
@@ -625,11 +624,11 @@ export function UploadSection({
   type,
   title,
   description,
+  setSuccess,
+  setError,
   onUploadSuccess,
 }: UploadSectionProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<HTMLDivElement>(null);
 
@@ -739,18 +738,6 @@ export function UploadSection({
           <Paperclip size={18} />
         </Button>
       </div>
-
-      {/* {error && (
-        <div className="fix mt-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="fix mt-4 p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
-          File uploaded successfully!
-        </div>
-      )} */}
     </div>
   );
 }

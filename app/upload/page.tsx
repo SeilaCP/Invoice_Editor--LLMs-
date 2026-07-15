@@ -55,7 +55,7 @@ export default function UploadPage() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(236,253,245,0.9),_rgba(255,255,255,1)_42%,_rgba(226,232,240,1)_100%)]">
+    <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 flex items-center justify-between gap-4 rounded-3xl border border-border bg-background/80 px-5 py-4 shadow-sm backdrop-blur">
           <div>
@@ -103,14 +103,14 @@ export default function UploadPage() {
             />
           </div>
 
-          <div className="rounded-3xl border border-border bg-background/85 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur">
+          {/* <div className="rounded-3xl border border-border bg-background/85 p-6 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur">
             <UploadSection
               type="pdf"
               title="PDF Document"
               description="Upload a PDF to store it and make it searchable."
               onUploadSuccess={() => setLastUploadType("pdf")}
             />
-          </div>
+          </div> */}
         </div>
       </div>
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">

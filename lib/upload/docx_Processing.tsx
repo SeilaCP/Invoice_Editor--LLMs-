@@ -1,10 +1,7 @@
 export async function extractDocxText(file: File): Promise<string> {
   try {
-    // For simplicity, we'll extract basic text from the docx
-    // A full implementation would use a proper docx parser
     const buffer = await file.arrayBuffer()
 
-    // This is a simplified extraction - in production, use a proper docx parser
     const text = new TextDecoder().decode(buffer)
     return text
   } catch (error) {
@@ -14,7 +11,6 @@ export async function extractDocxText(file: File): Promise<string> {
 }
 
 export async function extractPlaceholders(text: string): Promise<string[]> {
-  // Find placeholders in format {{placeholder}} or ${placeholder} or [placeholder]
   const patterns = [/\{\{(\w+)\}\}/g, /\$\{(\w+)\}/g, /\[(\w+)\]/g]
 
   const placeholders = new Set<string>()

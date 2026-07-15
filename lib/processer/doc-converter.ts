@@ -1,12 +1,3 @@
-/**
- * Legacy .doc -> .docx conversion via LibreOffice headless (soffice).
- *
- * This requires LibreOffice to be installed on the host running this code
- * (the `soffice` binary must be reachable). It will NOT work on typical
- * serverless hosting without a custom layer/container that bundles LibreOffice.
- * If LibreOffice isn't available, this throws a clear, user-facing error so
- * callers can surface it instead of failing silently.
- */
 import libreConvert from "libreoffice-convert";
 import { promisify } from "util";
 
