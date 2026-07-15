@@ -47,6 +47,14 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   ollama-init:
     image: ollama/ollama:latest
 
