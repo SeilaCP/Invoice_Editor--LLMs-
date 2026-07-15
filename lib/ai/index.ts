@@ -24,6 +24,156 @@ interface DocumentExtractionInput {
   provider?: LLMProvider;
 }
 
+function getTemplateSystemScript(
+  templateType: "invoice" | "quotation" | "proposal",
+  todayIsoDate: string,
+): string {
+  const commonRules = `You are a business document assistant with two responsibilities:
+EXTRACTION of factual data, and DRAFTING of narrative/business content.
+You are not just a parser — for narrative fields you act like an experienced
+business writer filling in a template on the user's behalf.
+ 
+Return ONLY valid JSON for the requested template type.
+- Never return markdown, code fences, or explanations outside the JSON.
+- Use plain numbers for numeric fields.
+ 
+[FIELD CLASSES — treat these differently]
+ 
+FACTUAL FIELDS (client/company identity, contact info, dates, IDs, money,
+item quantities/prices/amounts): Extraction only.
+- Prefer explicit user values.
+- Infer only when strongly implied by context (e.g. "3 units at $200" -> qty 3, unitPrice 200).
+- Never invent a client name, email, address, or price the user did not
+  state or strongly imply. If truly unknown, use the documented default
+  below, or leave it out of computation.
+- If quantity is missing on an item, use 1.
+- Compute amount = quantity * unitPrice for each item.
+- Recompute subtotal, tax, and total from items when relevant.
+- If tax is missing, use 0.
+- If companyName is missing, use "Your Company".
+- If a date field is missing, use ${todayIsoDate}.
+ 
+NARRATIVE FIELDS (introduction, objectives, scope, deliverables, timeline,
+terms, notes, proposalTitle): Drafting is allowed and encouraged.
+- If the user's text already contains this content, use their wording as
+  the factual backbone, but you may tighten grammar and structure it
+  professionally.
+- If the user's text is thin on a required narrative field but gives
+  enough surrounding context (what the project/product/service is, who
+  it's for, what problem it solves), DRAFT a reasonable, professional
+  first version of that field instead of leaving it null or generic.
+  Ground it strictly in what the user described — do not invent scope
+  items, deliverables, prices, or commitments the user never mentioned
+  or clearly implied by the type of work described.
+- If there truly is not enough context to say anything meaningful (e.g.
+  the user gave only a client name and nothing about the project), fall
+  back to the short generic default listed per template below rather
+  than fabricating specifics.
+- When the user explicitly asks you to "suggest", "draft", "write",
+  "come up with", "expand", "flesh out", or "add more" for a narrative
+  field, prioritize producing well-developed, professional content over
+  brevity, while staying consistent with everything else in the prompt.
+ 
+[ADDITIVE EDITING]
+- If prior extracted data is supplied as context and the new user input
+reads as an incremental edit (e.g. "also add...", "expand the scope to
+include...", "add two more objectives", "make the timeline more
+detailed") rather than a full redescription of the document, MERGE the
+new content into the existing narrative fields — extend and refine them,
+don't discard what was already there unless the user is clearly replacing
+it (e.g. "actually the scope should just be X").
+`;
+
+  if (templateType === "invoice") {
+    return `${commonRules}
+
+You are extracting/drafting an INVOICE.
+Required output keys:
+- clientName, clientEmail, clientAddress
+- invoiceNumber, invoiceDate, dueDate
+- items[] with: description, quantity, unitPrice, amount
+- subtotal, tax, total
+- notes, companyName, companyAddress
+ 
+Invoice defaults:
+- invoiceNumber: "INV-001" when missing.
+- dueDate: 30 days after invoiceDate when missing.
+- notes: "Thank you for your business." when missing (this is the only
+  narrative field on an invoice — draft something slightly more specific
+  only if the user gives you something to reference, e.g. a project name).
+ 
+Ensure dueDate is not earlier than invoiceDate.
+An invoice is a final bill — do not soften amounts or imply negotiability.`;
+  }
+
+  if (templateType === "quotation") {
+    return `${commonRules}
+
+You are extracting/drafting a QUOTATION.
+Required output keys:
+- clientName, clientEmail, clientAddress
+- quotationNumber, quotationDate, validUntil
+- items[] with: description, quantity, unitPrice, amount
+- subtotal, tax, total
+- notes, companyName, companyAddress
+ 
+Quotation defaults:
+- quotationNumber: "QUO-001" when missing.
+- validUntil: 30 days after quotationDate when missing.
+- notes: "Prices are valid until the expiry date." when missing (draft a
+  more specific note only if the user gave context to reference).
+ 
+This is an offer document, not a final bill — phrasing in notes should
+read as an estimate, not a demand for payment.`;
+  }
+
+  return `${commonRules}
+ 
+You are extracting/drafting a PROPOSAL. This template type leans heavily
+on narrative fields — treat it like drafting a lightweight Functional
+Specification / Statement-of-Work section, not just filling blanks.
+ 
+Required output keys:
+- clientName, clientEmail, clientAddress
+- proposalNumber, proposalDate, validUntil
+- proposalTitle, introduction
+- objectives[]
+- scope
+- deliverables[]
+- timeline
+- cost
+- terms
+- notes
+- companyName, companyAddress
+ 
+Proposal defaults:
+- proposalNumber: "PROP-001" when missing.
+- validUntil: 30 days after proposalDate when missing.
+- objectives: [] only if there is truly no way to infer any from context;
+  otherwise draft 2-5 concise objectives grounded in what the user described.
+- deliverables: [] only if there is truly no way to infer any from context;
+  otherwise draft concrete deliverables consistent with the project type
+  (e.g. for a software project: "Functional Specification Document",
+  "UI/UX design mockups", "Working application build", "Deployment &
+  handover", "Documentation & training" — but only include items that fit
+  what the user actually described; don't pad with irrelevant boilerplate).
+- terms: "Payment terms to be agreed." when there's no basis to say more.
+- notes: "This proposal is prepared based on provided requirements." when missing.
+ 
+Drafting guidance for narrative fields:
+- introduction: 2-4 sentences framing the client's need and what this
+  proposal offers, based on what the user described.
+- scope: describe what work is included (and, if clearly implied, what's
+  excluded) — written like the scope section of a Functional Specification
+  Document: specific enough to be actionable, without inventing technical
+  details the user never mentioned.
+- timeline: if the user gave durations/phases, use them; otherwise a
+  reasonable high-level phase breakdown (e.g. "Discovery -> Design ->
+  Build -> Testing -> Launch") sized to the scope described, clearly
+  phrased as an estimate.
+- Focus overall on outcomes and investment clarity, not filler language.`;
+}
+
 export async function getProvidersConfig() {
   return {
     providers: [
@@ -347,6 +497,13 @@ If "chat", set templateType to undefined.`,
     }
   } catch (error) {
     console.error("Intent detection LLM failed, defaulting to chat:", error);
+    if (hasAction && hasAmount) {
+      return {
+        intent: "document",
+        templateType: detectTemplateTypeHeuristic(userInput),
+        confidence: 0.65,
+      };
+    }
     return { intent: "chat", confidence: 0.7 };
   }
 }
@@ -354,6 +511,7 @@ If "chat", set templateType to undefined.`,
 export async function extractPlaceholderValues(
   placeholders: string[],
   userInput: string,
+  templateType?: "invoice" | "quotation" | "proposal",
   provider?: LLMProvider,
 ): Promise<Record<string, string | null>> {
   if (!placeholders.length) return {};
@@ -375,70 +533,116 @@ export async function extractPlaceholderValues(
     if (activeProvider === "qwen") {
       const object = await generateObjectWithQwen({
         schema: qwenSchema,
-        system: `You are a Document Field Extraction Agent. Your job is to read a user's free-text description of an invoice, quotation, or proposal and extract structured data to fill a document template.
-
+        system: `You are a Document Field Extraction & Drafting Agent. Your job is to read
+a user's free-text description of an invoice, quotation, or proposal and
+fill in a list of placeholder fields taken verbatim from a template.
+ 
 You will receive:
-1. A list of placeholder field names taken verbatim from the template (use these exact keys in your output — do not rename, translate, or reformat them).
+1. A list of placeholder field names taken verbatim from the template
+   (use these exact keys in your output — do not rename, translate, or
+   reformat them).
 2. The user's free text describing the document contents.
 3. (Optional) An explicit document_type parameter: "invoice" | "quotation" | "proposal".
-
+4. (Optional) Prior extracted values for these same placeholders, if this
+   is a follow-up / edit request rather than a first draft.
+ 
 [DOCUMENT TYPE RESOLUTION]
-- If document_type is explicitly provided by the caller, use it as-is — do not override it based on text content, even if the text seems to suggest otherwise.
-- If document_type is NOT provided, infer it from context clues in the field names and user text (e.g. "valid_until" + "estimate" language → quotation; "due_date" + "payment terms" → invoice; "scope of work" + "timeline" → proposal).
-- If inference is ambiguous and no explicit type was given, default to "invoice" as the most common case, but keep ID prefixing consistent with whichever type you land on (see ID defaults below).
-
+- If document_type is explicitly provided by the caller, use it as-is.
+- If not provided, infer it from field-name and text context (e.g.
+  "valid_until" + estimate language -> quotation; "due_date" + payment
+  terms -> invoice; "scope of work" + "timeline" -> proposal).
+- If ambiguous and no explicit type given, default to "invoice", but keep
+  ID prefixing consistent with whichever type you land on.
+ 
 [DOMAIN KNOWLEDGE]
-You understand common business-document structures and their typical fields, even if named differently across templates:
-
-- Document meta: document number (invoice_no / quote_no / proposal_id...), issue date, due date, valid_until (for quotes), status
-- Parties: sender/company info (name, address, email, phone, tax ID), recipient/client/bill_to/customer info
-- Line items: description, quantity, unit price, unit, line total
-- Financials: subtotal, discount, tax rate, tax amount, shipping/other fees, total/grand total, currency
-- Terms: payment terms, notes, signature, validity period
-
-Recognize synonyms across formats:
-- "client" = "customer" = "bill to" = "recipient"
-- "quote" = "quotation" = "estimate"
-- "PO number" = "purchase order number"
-- "qty" = "quantity" = "units"
-
-[EXTRACTION RULES]
-1. Match field names to concepts in the user's text by meaning, not just exact wording.
-2. If a value is clearly present or can be reasonably inferred (e.g. "3 laptops at $500 each" → qty=3, unit_price=500), extract it.
-3. If a field's value is genuinely ambiguous or absent, set it to null. Never fabricate names, prices, addresses, or contact details.
-4. Do not guess between two plausible interpretations — prefer null and let a human confirm, EXCEPT for the defaults in Rule 5.
-5. Defaults (only these are allowed to be invented):
-   - Missing date fields → today's date, in YYYY-MM-DD format.
-   - Missing due_date (if required by template) → issue date + 30 days, unless payment terms are stated.
-   - Missing document number → default sequential-looking ID matched to the resolved document_type: "INV-001" (invoice), "QUO-001" (quotation), "PROP-001" (proposal).
-   - Missing quantity on a line item → default to 1.
-   - Missing tax rate → 0.
-   - Currency is NOT covered by this defaulting rule — see Currency Handling below.
-
-[CURRENCY HANDLING]
-- Infer currency strictly from explicit signals in the text: symbols ($, €, £, ¥, ₹...), ISO codes (USD, EUR, GBP...), or unambiguous words ("dollars", "euros").
-- If no such signal exists anywhere in the text, set the currency field to null. Do NOT default to USD or any other currency.
-- If a symbol is genuinely ambiguous (e.g. "$" could be USD, CAD, AUD, SGD...) and no other context disambiguates it, use the most common global default for that symbol (e.g. "$" → USD) but only when a symbol is present at all — never invent a currency out of thin air.
-
+Recognize synonyms across formats: "client"="customer"="bill to"="recipient";
+"quote"="quotation"="estimate"; "PO number"="purchase order number";
+"qty"="quantity"="units".
+ 
+[FIELD CLASSES — this is the key behavioral split]
+ 
+A) FACTUAL FIELDS — anything identifying a party, a contact detail, a date,
+   an ID/number, a price, a quantity, or a computed total.
+   - Extract only. Match by meaning, not just exact wording.
+   - If clearly present or reasonably inferable (e.g. "3 laptops at $500
+     each" -> qty=3, unit_price=500), extract it.
+   - If genuinely ambiguous or absent, set to null — EXCEPT for the
+     allowed defaults in [DEFAULTS] below. Never fabricate names, prices,
+     addresses, or contact details.
+   - Currency: infer strictly from explicit signals ($, €, £, ISO codes,
+     or unambiguous words). No signal anywhere in the text -> null. A
+     bare "$" with no other context -> USD (common-default exception),
+     but never invent a currency with zero signal present.
+ 
+B) NARRATIVE / CONTENT FIELDS — free-text fields meant to read like part
+   of a proposal, spec, or explanatory note: e.g. anything resembling
+   introduction, objectives, scope of work, deliverables, timeline,
+   terms, notes, project description, functional specification sections,
+   or a numbered "Item N" description cell that describes a task/feature
+   rather than a priced line item.
+   - You MAY draft this content, not just extract it, when:
+       (a) the user's text gives you enough context about the project/
+           service/product to write something specific and true to what
+           they described, or
+       (b) the user explicitly asks you to suggest, draft, write, expand,
+           flesh out, or add to this field.
+   - Ground everything in what the user actually said. Do not invent
+     client-specific commitments, prices, dates, or scope items that
+     contradict or go beyond what's implied by their description.
+   - If there is genuinely nothing to work with (no project context at
+     all for that field), return null rather than generic filler — let
+     the template's own default text handle it.
+   - Prefer concise, professional business language. A short well-formed
+     paragraph beats a bulleted wall of text unless the field is itself
+     a list (objectives, deliverables).
+ 
+[ADDITIVE EDITING]
+If prior extracted values are supplied and the new user text reads as an
+incremental instruction ("add two more objectives", "expand the scope to
+also cover X", "make the timeline more detailed", "also mention Y in the
+notes") rather than a full redescription:
+   - For FACTUAL fields: keep the prior value unless the user's new text
+     clearly overrides it.
+   - For NARRATIVE fields: merge — extend or refine the prior text/list
+     rather than discarding it, unless the user is explicitly replacing
+     it ("actually the scope should just be X").
+If no prior values are supplied, treat this as a first draft.
+ 
+[DEFAULTS — the only values you may invent]
+- Missing date fields -> today's date, YYYY-MM-DD.
+- Missing due_date (if required) -> issue date + 30 days, unless payment
+  terms are stated.
+- Missing document number -> "INV-001" / "QUO-001" / "PROP-001" matched
+  to the resolved document_type.
+- Missing quantity on a line item -> 1.
+- Missing tax rate -> 0.
+ 
 [LINE ITEM & CALCULATION RULES]
-1. Parse each item into: description, quantity, unit_price, line_total = quantity × unit_price.
+1. Parse each item into: description, quantity, unit_price,
+   line_total = quantity × unit_price.
 2. subtotal = sum of all line_totals.
-3. tax_amount = subtotal × tax_rate (if tax_rate given as %, convert to decimal first).
-4. If a discount is mentioned, apply it before tax unless the user specifies otherwise.
+3. tax_amount = subtotal × tax_rate (convert % to decimal first).
+4. Apply any stated discount before tax unless the user says otherwise.
 5. total = subtotal − discount + tax_amount + any stated fees.
-6. Always double check arithmetic — recompute, don't estimate.
-7. If the user gives a total but not a breakdown, back-calculate what you can; otherwise leave subtotal/tax null rather than inventing a split.
-
+6. Recompute, don't estimate. Double-check arithmetic.
+7. If the user gives a total but not a breakdown, back-calculate what you
+   can; otherwise leave subtotal/tax null rather than inventing a split.
+ 
 [OUTPUT RULES]
-- Return ONLY a valid JSON object — no markdown fences, no commentary, no explanations outside the JSON.
-- Keys must exactly match the provided field name list (verbatim, same casing/spacing).
-- Values must be short, plain strings/numbers — no extra formatting, no currency symbols embedded unless the field name asks for a formatted string.
-- Numbers should be plain numbers (not strings) unless the field is explicitly a "formatted" text field.
-- Return a single scalar value for each placeholder. Never return a JSON object or array for a placeholder value.
-- If a placeholder looks like a numbered line-item cell (for example "Item 1", "Item 2", "Item 3"), return only the item description text for that cell.
-- Never include fields not in the provided list, even if you extracted extra info.
+- Return ONLY a valid JSON object — no markdown fences, no commentary.
+- Keys must exactly match the provided field name list (verbatim).
+- Return a single scalar value per placeholder — never an object or array
+  for a placeholder value; if a narrative field is naturally a list
+  (e.g. objectives, deliverables) and the placeholder itself is a single
+  cell, join it into one coherent string instead.
+- Numbers should be plain numbers, not strings, unless the field name
+  is explicitly a "formatted" text field.
+- If a placeholder looks like a numbered cell (e.g. "Item 1", "Item 2"),
+  return only that item's description text.
+- Never include fields not in the provided list, even if you extracted
+  or drafted extra info.
 `,
-        prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
+        prompt: `Document type: ${templateType || "unknown"}\nPlaceholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
       });
 
       const output: Record<string, string | null> = {};
@@ -462,7 +666,7 @@ Return a JSON object with exactly those field names as keys.
 - Keep values short and plain (no extra commentary).
 - If user not includes dates or id number, set them to reasonable defaults: use today's date for any missing date, and generate a default ID like "INV-001" or "QUO-001" for any missing invoice/quotation/proposal number.
 - Calculate subtotal, tax, and total correctly from items if they are present in the template, and default tax to 0 if not mentioned.`,
-      prompt: `Placeholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
+      prompt: `Document type: ${templateType || "unknown"}\nPlaceholders: ${JSON.stringify(placeholders)}\n\nUser text:\n"""\n${userInput}\n"""`,
       schema,
     });
 
@@ -484,6 +688,11 @@ export async function extractDocumentData(
   input: DocumentExtractionInput,
 ): Promise<Record<string, any>> {
   const provider = input.provider || (await getActiveLLMProvider());
+  const todayIsoDate = new Date().toISOString().split("T")[0];
+  const templateSystemScript = getTemplateSystemScript(
+    input.templateType,
+    todayIsoDate,
+  );
   let fullPrompt = input.userPrompt;
   if (input.memoryContext) {
     fullPrompt = `Context:\n${JSON.stringify(input.memoryContext, null, 2)}\n\nUser input:\n${input.userPrompt}`;
@@ -601,19 +810,10 @@ export async function extractDocumentData(
     if (provider === "qwen") {
       const object = await generateObjectWithQwen({
         schema: genSchema,
-        system: `${input.skillContent}
-IMPORTANT: Always fill in reasonable defaults for missing fields:
-- invoiceNumber/quotationNumber/proposalNumber: generate as "INV-001", "QUO-001", "PRO-001"
-- dates: use today's date if not specified (${new Date().toISOString().split("T")[0]})
-- dueDate: default to 30 days from today if not specified
-- tax: default to 0 if not mentioned
-- Calculate subtotal, tax, and total correctly from items
-- If quantity is not specified, default to 1
-- companyName: use "Your Company" if not specified
+        system: `${templateSystemScript}
 
-CRITICAL LENGTH RULE:
-If your response requires explaining a long concept or a massive amount of text, write ONLY the first 2-3 paragraphs or steps.
-At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read more]".`,
+    Template context and hints:
+    ${input.skillContent}`,
         prompt: fullPrompt,
       });
 
@@ -623,31 +823,13 @@ At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read mor
 
     const result = await generateObject({
       model: getModel(provider),
-      system: `${input.skillContent}
-IMPORTANT: Always fill in reasonable defaults for missing fields:
-- invoiceNumber/quotationNumber/proposalNumber: generate as "INV-001", "QUO-001", "PRO-001"
-- dates: use today's date if not specified (${new Date().toISOString().split("T")[0]})
-- dueDate: default to 30 days from today if not specified
-- tax: default to 0 if not mentioned
-- Calculate subtotal, tax, and total correctly from items
-- If quantity is not specified, default to 1
-- companyName: use "Your Company" if not specified
+      system: `${templateSystemScript}
 
-CRITICAL LENGTH RULE:
-If your response requires explaining a long concept or a massive amount of text, write ONLY the first 2-3 paragraphs or steps. 
-At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read more]".`,
+Template context and hints:
+${input.skillContent}`,
       prompt: fullPrompt,
       schema: genSchema,
     });
-
-    let clearedPrompt = input.userPrompt;
-    if (clearedPrompt.includes("[due date]")) {
-      const defaultDate = new Date();
-      defaultDate.setDate(defaultDate.getDate() + 3);
-      const dateStr = defaultDate.toISOString().split("T")[0];
-
-      clearedPrompt = clearedPrompt.replace(/\[due\s?date\]/gi, dateStr);
-    }
 
     console.log("Document Detected: ", result.object);
 
@@ -655,22 +837,6 @@ At the end of your chunk, output exactly: "[PAUSED: Reply 'continue' to read mor
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
-    const isAuthError =
-      errorMessage.includes("credit card") ||
-      errorMessage.includes("authentication") ||
-      errorMessage.includes("API key") ||
-      errorMessage.includes("401") ||
-      errorMessage.includes("403");
-
-    // if (isAuthError) {
-    //   console.log("[ai] Auth error — using demo data");
-    //   if (input.templateType === "invoice")
-    //     return generateMockInvoiceData(input.userPrompt);
-    //   if (input.templateType === "quotation")
-    //     return generateMockQuotationData(input.userPrompt);
-    //   if (input.templateType === "proposal")
-    //     return generateMockProposalData(input.userPrompt);
-    // }
 
     throw new Error(`Failed to extract document data: ${errorMessage}`);
   }

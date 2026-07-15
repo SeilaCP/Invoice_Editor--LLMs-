@@ -4,6 +4,7 @@ import { google } from "@ai-sdk/google";
 import { z } from "zod";
 import {
   extractDocxText,
+  extractDocxPlaceholders,
   extractPlaceholders,
 } from "@/lib/processer/docx-processor";
 import { extractPdfText } from "@/lib/processer/pdf-processor";
@@ -23,7 +24,6 @@ import { buildEmbedding, dbHelpers } from "@/lib/db/mock-db";
 import { MAX_UPLOAD_SIZE_BYTES, formatBytes } from "@/lib/upload/constraints";
 import { generateDocxFromTemplate } from "@/lib/documents/docx-generator";
 import { extractPlaceholderValues } from "@/lib/ai";
-import error from "next/dist/api/error";
 
 type LLMProvider = "gemini" | "openai" | "claude" | "qwen";
 
@@ -164,7 +164,11 @@ export async function uploadDocxTemplate(formData: FormData): Promise<{
 
     // Extract text and placeholders
     const text = await extractDocxText(docxBuffer);
-    const placeholders = await extractPlaceholders(text);
+    const xmlPlaceholders = await extractDocxPlaceholders(docxBuffer);
+    const textPlaceholders = await extractPlaceholders(text);
+    const placeholders = Array.from(
+      new Set([...xmlPlaceholders, ...textPlaceholders]),
+    );
 
     // Analyze with Gemini
     const analysis = await analyzeTemplateWithGemini(text, placeholders);
@@ -508,6 +512,7 @@ export async function fillTemplateFromText(
     const extracted = await extractPlaceholderValues(
       placeholders,
       trimmedInput,
+      memory.templateType === "generic" ? undefined : memory.templateType,
       provider,
     );
     const mergedFields: Record<string, string | null> = {};

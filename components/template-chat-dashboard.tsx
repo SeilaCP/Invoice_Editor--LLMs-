@@ -27,7 +27,7 @@ interface TemplateDocxGenerateProps {
   selectedTemplate: TemplateMatch;
   previewError: string | null;
   previewUrl: string | null;
-  docxPreviewRef: React.RefObject<HTMLDivElement>;
+  docxPreviewRef: React.RefObject<HTMLDivElement | null>;
 }
 
 interface UploadSectionProps {

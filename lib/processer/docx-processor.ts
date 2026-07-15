@@ -36,42 +36,37 @@ export async function extractDocxText(
   }
 }
 
-/**
- * A .docx file is a zip archive; the document body lives at
- * word/document.xml. Word frequently splits a single visible word (and even
- * a single placeholder like {{client name}}) across multiple <w:t> runs for
- * formatting reasons, so we reconstruct plain text by concatenating every
- * <w:t> run in document order, inserting a newline at each paragraph/break
- * boundary. This is not a full DOCX parser, but it is enough to recover
- * readable text and placeholder patterns for extraction/search purposes.
- */
-function extractTextFromDocxBuffer(buffer: Buffer): string {
+function readWordXmlFiles(buffer: Buffer): string[] {
   const zip = new PizZip(buffer);
-  const documentXmlFile = zip.file("word/document.xml");
+  const xmlFiles = zip.file(
+    /^word\/(document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$/,
+  );
+  return xmlFiles.map((file) => file.asText());
+}
 
-  if (!documentXmlFile) {
-    throw new Error("word/document.xml not found in DOCX archive");
+function extractTextFromDocxBuffer(buffer: Buffer): string {
+  const xmlContents = readWordXmlFiles(buffer);
+  if (!xmlContents.length) {
+    throw new Error("No readable XML files found in DOCX archive");
   }
 
-  const xml = documentXmlFile.asText();
-
   let result = "";
-  // Walk the XML sequentially so ordering (and thus placeholder patterns
-  // split across runs) is preserved.
-  const tokenPattern =
-    /<w:t[^>]*>([\s\S]*?)<\/w:t>|<w:tab\s*\/>|<\/w:p>|<w:br\s*\/>/g;
-  let match: RegExpExecArray | null;
+  for (const xml of xmlContents) {
+    const tokenPattern =
+      /<w:t[^>]*>([\s\S]*?)<\/w:t>|<w:tab\s*\/>|<\/w:p>|<w:br\s*\/>/g;
+    let match: RegExpExecArray | null;
 
-  while ((match = tokenPattern.exec(xml)) !== null) {
-    const [fullMatch, textContent] = match;
-    if (textContent !== undefined) {
-      result += decodeXmlEntities(textContent);
-    } else if (fullMatch.startsWith("<w:tab")) {
-      result += "\t";
-    } else {
-      // paragraph end or explicit line break
-      result += "\n";
+    while ((match = tokenPattern.exec(xml)) !== null) {
+      const [fullMatch, textContent] = match;
+      if (textContent !== undefined) {
+        result += decodeXmlEntities(textContent);
+      } else if (fullMatch.startsWith("<w:tab")) {
+        result += "\t";
+      } else {
+        result += "\n";
+      }
     }
+    result += "\n";
   }
 
   return result;
@@ -87,6 +82,29 @@ function decodeXmlEntities(text: string): string {
 }
 
 const MAX_BRACKET_PLACEHOLDER_LENGTH = 60;
+const MAX_BRACKET_PLACEHOLDER_WORDS = 6;
+
+function normalizePlaceholderCandidate(value: string): string | null {
+  const cleaned = value
+    .trim()
+    .replace(/^[:\-–\s]+|[:\-–\s]+$/g, "")
+    .replace(/\s+/g, " ");
+
+  if (!cleaned) return null;
+  if (cleaned.length > MAX_BRACKET_PLACEHOLDER_LENGTH) return null;
+
+  const words = cleaned.split(" ").filter(Boolean);
+  if (words.length > MAX_BRACKET_PLACEHOLDER_WORDS) return null;
+
+  if (/[<>]/.test(cleaned)) return null;
+  if (/[.!?,;:]/.test(cleaned)) return null;
+
+  // Avoid capturing regular prose from [ ... ] while keeping typical
+  // placeholder names such as [Client Name], [invoice_no], [due-date].
+  if (!/[a-zA-Z0-9]/.test(cleaned)) return null;
+
+  return cleaned;
+}
 
 export async function extractPlaceholders(text: string): Promise<string[]> {
   // Find placeholders in format {{placeholder}}, ${placeholder}, or
@@ -103,15 +121,44 @@ export async function extractPlaceholders(text: string): Promise<string[]> {
   for (const pattern of patterns) {
     let match;
     while ((match = pattern.exec(text)) !== null) {
-      const candidate = match[1].trim();
+      const candidate = normalizePlaceholderCandidate(match[1]);
       // Guard the permissive [ ] pattern against matching unrelated bracketed
       // prose (footnotes, citations, etc.) by requiring a plausible
       // placeholder-like length.
-      if (candidate && candidate.length <= MAX_BRACKET_PLACEHOLDER_LENGTH) {
+      if (candidate) {
         placeholders.add(candidate);
       }
     }
   }
 
   return Array.from(placeholders);
+}
+
+export async function extractDocxPlaceholders(
+  input: File | Buffer | ArrayBuffer,
+): Promise<string[]> {
+  let buffer: Buffer;
+  try {
+    if (Buffer.isBuffer(input)) {
+      buffer = input;
+    } else if (input instanceof ArrayBuffer) {
+      buffer = Buffer.from(input);
+    } else {
+      buffer = Buffer.from(await (input as File).arrayBuffer());
+    }
+  } catch (error) {
+    console.error("[v0] Error reading DOCX input for placeholders:", error);
+    return [];
+  }
+
+  try {
+    const xmlContents = readWordXmlFiles(buffer);
+    if (!xmlContents.length) return [];
+
+    const raw = decodeXmlEntities(xmlContents.join("\n"));
+    return extractPlaceholders(raw);
+  } catch (error) {
+    console.error("[v0] Error extracting placeholders from DOCX XML:", error);
+    return [];
+  }
 }
