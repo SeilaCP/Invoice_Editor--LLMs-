@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, use } from "react";
 import { Send, Bot, User, Download, RefreshCcw, Paperclip } from "lucide-react";
 import {
   findMatchingTemplates,
@@ -12,6 +12,8 @@ import type { TemplateMatch, FillTemplateResult } from "@/app/upload_action";
 import { downloadBase64File } from "@/lib/download";
 import { renderAsync } from "docx-preview";
 import { Button } from "@/components/ui/button";
+import doc, { fill } from "pdfkit";
+import { set } from "mongoose";
 
 interface Message {
   id: string;
@@ -103,6 +105,16 @@ export function TemplateChatDashboard() {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
+    console.log(
+      "Selected template or preview URL changed:",
+      selectedTemplate,
+      previewUrl,
+      fillSessionId,
+      docxPreviewRef.current,
+    );
+  }, [selectedTemplate, previewUrl, docxPreviewRef.current, fillSessionId]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
@@ -119,9 +131,15 @@ export function TemplateChatDashboard() {
       return;
     }
 
-    const latestFillResult = [...messages]
-      .reverse()
-      .find((m) => m.type === "fill" && m.fillResult)?.fillResult;
+    const latestFillResult = fillSessionId
+      ? [...messages]
+          .reverse()
+          .find(
+            (m) =>
+              m.type === "fill" &&
+              m.fillResult?.fillSessionId === fillSessionId,
+          )?.fillResult
+      : undefined;
 
     const previewFileName =
       latestFillResult?.fileName ?? selectedTemplate.filename;
@@ -185,9 +203,10 @@ export function TemplateChatDashboard() {
 
   const handleNewSearch = () => {
     setSelectedTemplate(null);
-    setFillSessionId(null);
     setPreviewUrl(null);
     setPreviewError(null);
+    setFillSessionId(() => null);
+
     setMessages((prev) => [
       ...prev,
       {
