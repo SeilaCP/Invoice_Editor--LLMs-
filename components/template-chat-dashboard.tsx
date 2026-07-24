@@ -105,16 +105,6 @@ export function TemplateChatDashboard() {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    console.log(
-      "Selected template or preview URL changed:",
-      selectedTemplate,
-      previewUrl,
-      fillSessionId,
-      docxPreviewRef.current,
-    );
-  }, [selectedTemplate, previewUrl, docxPreviewRef.current, fillSessionId]);
-
-  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 

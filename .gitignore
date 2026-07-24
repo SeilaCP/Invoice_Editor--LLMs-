@@ -13,6 +13,12 @@ __v0_jsx-dev-runtime.ts
 node_modules
 .next/
 .DS_Store
+node-compile-cache/
+prebuild-next.log
+prebuild-next.pid
+
+# Stray generated folder seen in some Windows standalone outputs
+D*Automate_Invoice*AI_base_generation/
 
 
 .env.local
