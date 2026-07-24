@@ -2,8 +2,10 @@ import { embed } from "ai";
 import { google } from "@ai-sdk/google";
 import {
   connectDB,
+  DocxTemplateChunk,
   DocxTemplate,
   GeneratedDocument,
+  IDocxTemplateChunk,
   IDocxTemplate,
   IGeneratedDocumentRecord,
   IMemoryRecord,
@@ -14,6 +16,12 @@ import {
   DocxTemplateMemory,
 } from "@/lib/mongodb";
 import { ollamaClient as ollama } from "@/lib/ai/ollama-client";
+import type { TemplateChunkInput } from "@/lib/types/template";
+import {
+  buildChunkSearchText,
+  buildTemplateChunks,
+  buildTemplateSearchText,
+} from "@/lib/services/template-indexing.service";
 
 function getEmbeddingModel() {
   return google.embeddingModel("gemini-embedding-001");
@@ -39,6 +47,11 @@ function normalizeMongoRecord<T>(record: T): T {
   return JSON.parse(JSON.stringify(record));
 }
 
+function truncateChunkSnippet(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.length > 220 ? `${trimmed.slice(0, 220)}...` : trimmed;
+}
+
 function normalizeEmbeddingVector(value: unknown): number[] {
   if (!Array.isArray(value) || value.length === 0) return [];
 
@@ -60,6 +73,16 @@ function tokenizeSearchText(value: string): string[] {
   return (value.toLowerCase().match(/[a-z0-9]+/g) || []).filter(
     (token) => token.length >= 3,
   );
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildRegexSearch(tokens: string[]): RegExp | null {
+  const normalized = tokens.slice(0, 8).map((token) => escapeRegex(token));
+  if (!normalized.length) return null;
+  return new RegExp(normalized.join("|"), "i");
 }
 
 function lexicalSimilarityScore(
@@ -218,6 +241,7 @@ export const dbHelpers = {
     placeholderSchema: Array<{ name: string; required?: boolean }>;
     analysis?: string;
     embeddingText: string;
+    searchText?: string;
     embedding: number[];
     status?: "pending" | "ready" | "failed";
     source?: "upload" | "seed";
@@ -225,6 +249,15 @@ export const dbHelpers = {
     await connectDB();
     const record = await DocxTemplate.create({
       ...input,
+      searchText:
+        input.searchText ||
+        buildTemplateSearchText({
+          filename: input.filename,
+          templateType: input.templateType,
+          placeholders: input.placeholders,
+          analysisSummary: input.analysis,
+          extractedText: input.extractedText,
+        }),
       status: input.status ?? "ready",
       source: input.source ?? "upload",
     });
@@ -249,9 +282,12 @@ export const dbHelpers = {
   async findTopTemplates(
     queryText: string,
     options: { templateType?: TemplateType; limit?: number } = {},
-  ): Promise<Array<{ template: IDocxTemplate; score: number }>> {
+  ): Promise<
+    Array<{ template: IDocxTemplate; score: number; matchedChunkText?: string }>
+  > {
     await connectDB();
     const limit = options.limit && options.limit > 0 ? options.limit : 5;
+    const prefilterLimit = Math.max(limit * 10, 40);
 
     const readyQuery: Record<string, any> = { status: "ready" };
     if (options.templateType && options.templateType !== "generic") {
@@ -261,16 +297,153 @@ export const dbHelpers = {
       `[v0] Searching for templates matching "${queryText}" with type ...`,
     );
 
-    const candidates = await DocxTemplate.find(readyQuery)
+    const trimmedQuery = queryText.trim();
+    const queryTokens = tokenizeSearchText(trimmedQuery);
+    const regexSearch = buildRegexSearch(queryTokens);
+
+    let candidateIds = new Set<string>();
+
+    if (trimmedQuery) {
+      try {
+        const templateHits = await DocxTemplate.find(
+          {
+            ...readyQuery,
+            $text: { $search: trimmedQuery },
+          },
+          { score: { $meta: "textScore" } },
+        )
+          .sort({ score: { $meta: "textScore" }, updatedAt: -1 })
+          .limit(prefilterLimit)
+          .lean();
+
+        const chunkHits = await DocxTemplateChunk.find(
+          {
+            ...(options.templateType && options.templateType !== "generic"
+              ? { templateType: options.templateType }
+              : {}),
+            $text: { $search: trimmedQuery },
+          },
+          { score: { $meta: "textScore" } },
+        )
+          .sort({ score: { $meta: "textScore" }, updatedAt: -1 })
+          .limit(prefilterLimit)
+          .lean();
+
+        candidateIds = new Set([
+          ...templateHits.map((candidate) => String(candidate._id)),
+          ...chunkHits.map((chunk) => chunk.templateId),
+        ]);
+      } catch (error) {
+        console.warn(
+          "[v0] Text index prefilter unavailable, falling back to regex:",
+          error,
+        );
+      }
+    }
+
+    if (candidateIds.size === 0 && regexSearch) {
+      const templateHits = await DocxTemplate.find({
+        ...readyQuery,
+        searchText: { $regex: regexSearch },
+      })
+        .sort({ updatedAt: -1 })
+        .limit(prefilterLimit)
+        .lean();
+
+      const chunkHits = await DocxTemplateChunk.find({
+        ...(options.templateType && options.templateType !== "generic"
+          ? { templateType: options.templateType }
+          : {}),
+        searchText: { $regex: regexSearch },
+      })
+        .sort({ updatedAt: -1 })
+        .limit(prefilterLimit)
+        .lean();
+
+      candidateIds = new Set([
+        ...templateHits.map((candidate) => String(candidate._id)),
+        ...chunkHits.map((chunk) => chunk.templateId),
+      ]);
+    }
+
+    const candidateQuery =
+      candidateIds.size > 0
+        ? { ...readyQuery, _id: { $in: Array.from(candidateIds) } }
+        : readyQuery;
+
+    const candidates = await DocxTemplate.find(candidateQuery)
       .sort({ updatedAt: -1 })
+      .limit(
+        candidateIds.size > 0 ? prefilterLimit : Math.max(prefilterLimit, 60),
+      )
       .lean();
 
     if (!candidates.length) return [];
 
-    const trimmedQuery = queryText.trim();
+    const candidateMap = new Map(
+      candidates.map((candidate) => [String(candidate._id), candidate]),
+    );
     const queryEmbedding = trimmedQuery
       ? await buildEmbedding(trimmedQuery, "RETRIEVAL_QUERY")
       : [];
+
+    const chunks = await DocxTemplateChunk.find({
+      templateId: { $in: Array.from(candidateMap.keys()) },
+      ...(options.templateType && options.templateType !== "generic"
+        ? { templateType: options.templateType }
+        : {}),
+    }).lean();
+
+    const bestChunkByTemplate = new Map<
+      string,
+      { score: number; matchedChunkText?: string }
+    >();
+
+    for (const chunk of chunks) {
+      const chunkEmbedding = normalizeEmbeddingVector(chunk.embedding);
+      const canUseVectorSimilarity =
+        queryEmbedding.length > 0 &&
+        chunkEmbedding.length > 0 &&
+        chunkEmbedding.length === queryEmbedding.length;
+
+      const vectorSimilarity = canUseVectorSimilarity
+        ? cosineSimilarity(chunkEmbedding, queryEmbedding)
+        : 0;
+
+      const lexicalSimilarity = trimmedQuery
+        ? lexicalSimilarityScore(
+            trimmedQuery,
+            [
+              chunk.filename,
+              chunk.templateType,
+              chunk.embeddingText,
+              chunk.content,
+              chunk.placeholders?.join(" "),
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          )
+        : 0;
+
+      const keywordBonus = chunk.placeholders?.some((placeholder: string) =>
+        trimmedQuery.toLowerCase().includes(placeholder.toLowerCase()),
+      )
+        ? 0.15
+        : 0;
+
+      const score =
+        (canUseVectorSimilarity
+          ? vectorSimilarity + lexicalSimilarity * 0.2
+          : lexicalSimilarity) + keywordBonus;
+
+      const existing = bestChunkByTemplate.get(chunk.templateId);
+      if (!existing || score > existing.score) {
+        bestChunkByTemplate.set(chunk.templateId, {
+          score,
+          matchedChunkText: truncateChunkSnippet(chunk.content),
+        });
+      }
+    }
 
     const scored = candidates.map((candidate) => {
       const candidateEmbedding = normalizeEmbeddingVector(candidate.embedding);
@@ -309,9 +482,15 @@ export const dbHelpers = {
         ? vectorSimilarity + lexicalSimilarity * 0.2
         : lexicalSimilarity;
 
+      const chunkMatch = bestChunkByTemplate.get(String(candidate._id));
+      const finalScore = chunkMatch
+        ? Math.max(chunkMatch.score, similarity + keywordBonus * 0.5)
+        : similarity + keywordBonus;
+
       return {
         template: normalizeMongoRecord(candidate) as IDocxTemplate,
-        score: similarity + keywordBonus,
+        score: finalScore,
+        matchedChunkText: chunkMatch?.matchedChunkText,
       };
     });
 
@@ -335,5 +514,89 @@ export const dbHelpers = {
   async saveTemplateEmbedding(templateId: string, embedding: number[]) {
     await connectDB();
     return DocxTemplate.updateOne({ _id: templateId }, { $set: { embedding } });
+  },
+
+  async replaceTemplateChunks(
+    templateId: string,
+    templateType: TemplateType,
+    filename: string,
+    chunks: TemplateChunkInput[],
+  ) {
+    await connectDB();
+    await DocxTemplateChunk.deleteMany({ templateId });
+
+    if (!chunks.length) return [] as IDocxTemplateChunk[];
+
+    const chunkRecords = await Promise.all(
+      chunks.map(async (chunk) => ({
+        templateId,
+        filename,
+        templateType,
+        chunkIndex: chunk.chunkIndex,
+        content: chunk.content,
+        embeddingText: chunk.embeddingText,
+        searchText: buildChunkSearchText({
+          filename,
+          templateType,
+          placeholders: chunk.placeholders,
+          content: chunk.content,
+        }),
+        embedding: await buildEmbedding(chunk.embeddingText),
+        placeholders: chunk.placeholders,
+      })),
+    );
+
+    const inserted = await DocxTemplateChunk.insertMany(chunkRecords, {
+      ordered: true,
+    });
+    return inserted.map((record) => normalizeMongoRecord(record.toObject()));
+  },
+
+  async reindexTemplateSearchData() {
+    await connectDB();
+
+    const templates = await DocxTemplate.find({}).lean();
+    let updatedTemplates = 0;
+    let updatedChunks = 0;
+
+    for (const template of templates) {
+      const templateId = String(template._id);
+      const analysisSummary =
+        template.analysis || "Template loaded successfully";
+      const searchText = buildTemplateSearchText({
+        filename: template.filename,
+        templateType: template.templateType,
+        placeholders: template.placeholders || [],
+        analysisSummary,
+        extractedText: template.extractedText || "",
+      });
+
+      await DocxTemplate.updateOne(
+        { _id: template._id },
+        { $set: { searchText } },
+      );
+      updatedTemplates += 1;
+
+      const chunks = buildTemplateChunks({
+        filename: template.filename,
+        templateType: template.templateType,
+        extractedText: template.extractedText || "",
+        placeholders: template.placeholders || [],
+        analysisSummary,
+      });
+
+      await dbHelpers.replaceTemplateChunks(
+        templateId,
+        template.templateType,
+        template.filename,
+        chunks,
+      );
+      updatedChunks += chunks.length;
+    }
+
+    return {
+      templateCount: updatedTemplates,
+      chunkCount: updatedChunks,
+    };
   },
 };

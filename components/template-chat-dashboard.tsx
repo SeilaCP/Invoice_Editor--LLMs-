@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, use } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Send, Bot, User, Download, RefreshCcw, Paperclip } from "lucide-react";
 import {
   findMatchingTemplates,
@@ -8,12 +8,10 @@ import {
   uploadDocxTemplate,
   uploadPdf,
 } from "@/app/actions";
-import type { TemplateMatch, FillTemplateResult } from "@/app/upload_action";
+import type { FillTemplateResult, TemplateMatch } from "@/lib/types/template";
 import { downloadBase64File } from "@/lib/download";
 import { renderAsync } from "docx-preview";
 import { Button } from "@/components/ui/button";
-import doc, { fill } from "pdfkit";
-import { set } from "mongoose";
 
 interface Message {
   id: string;
@@ -36,6 +34,8 @@ interface UploadSectionProps {
   type: "docx" | "pdf";
   title: string;
   description: string;
+  setSuccess: React.Dispatch<React.SetStateAction<boolean>>;
+  setError: React.Dispatch<React.SetStateAction<string | null>>;
   onUploadSuccess: () => void;
 }
 
@@ -95,11 +95,6 @@ export function TemplateChatDashboard() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const docxPreviewRef = useRef<HTMLDivElement>(null);
   const [fillSessionId, setFillSessionId] = useState<string | null>(null);
-
-  const [lastUploadType, setLastUploadType] = useState<"docx" | "pdf" | null>(
-    null,
-  );
-  const type = lastUploadType === "docx" ? "docx" : "pdf";
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -531,7 +526,7 @@ export function TemplateChatDashboard() {
               description="Upload your DOCX template file here."
               setSuccess={setSuccess}
               setError={setError}
-              onUploadSuccess={() => setLastUploadType("docx")}
+              onUploadSuccess={() => setSuccess(true)}
             />
 
             <textarea

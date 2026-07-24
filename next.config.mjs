@@ -10,9 +10,6 @@ const nextConfig = {
     "pdfjs-dist",
     "@napi-rs/canvas",
   ],
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   images: {
     unoptimized: true,
   },

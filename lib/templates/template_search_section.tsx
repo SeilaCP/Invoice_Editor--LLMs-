@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { findMatchingTemplates, fillTemplateFromText } from "@/app/actions";
-import type { TemplateMatch, FillTemplateResult } from "@/app/upload_action";
+import type { TemplateMatch, FillTemplateResult } from "@/lib/types/template";
 import { downloadBase64File } from "@/lib/download";
 
 export function TemplateSearchSection() {

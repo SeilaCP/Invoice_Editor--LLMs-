@@ -25,9 +25,25 @@ export interface IDocxTemplate {
   placeholderSchema: Array<{ name: string; required?: boolean }>;
   analysis?: string;
   embeddingText?: string;
+  searchText?: string;
   embedding?: number[];
   status: TemplateStatus;
   source?: "upload" | "seed";
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface IDocxTemplateChunk {
+  _id?: any;
+  templateId: string;
+  filename: string;
+  templateType: TemplateType;
+  chunkIndex: number;
+  content: string;
+  embeddingText: string;
+  searchText: string;
+  embedding: number[];
+  placeholders: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -112,6 +128,7 @@ const docxTemplateSchema = new Schema<IDocxTemplate>(
     placeholderSchema: { type: [placeholderItemSchema], default: [] },
     analysis: String,
     embeddingText: String,
+    searchText: { type: String, default: "" },
     embedding: { type: [Number], default: [] },
     status: {
       type: String,
@@ -137,6 +154,21 @@ const docxTemplateSchemaMemory = new Schema<IDocxTemplateMemory>(
       enum: ["in_progress", "completed"],
       default: "in_progress",
     },
+  },
+  { timestamps: true },
+);
+
+const docxTemplateChunkSchema = new Schema<IDocxTemplateChunk>(
+  {
+    templateId: { type: String, required: true, index: true },
+    filename: { type: String, required: true },
+    templateType: { type: String, required: true, default: "generic" },
+    chunkIndex: { type: Number, required: true },
+    content: { type: String, required: true },
+    embeddingText: { type: String, required: true },
+    searchText: { type: String, required: true, default: "" },
+    embedding: { type: [Number], default: [] },
+    placeholders: { type: [String], default: [] },
   },
   { timestamps: true },
 );
@@ -185,6 +217,13 @@ const generatedDocumentSchema = new Schema<IGeneratedDocumentRecord>(
 
 pdfDocumentSchema.index({ searchText: "text", filename: "text" });
 docxTemplateSchema.index({ templateType: 1, updatedAt: -1 });
+docxTemplateSchema.index({ searchText: "text" });
+docxTemplateChunkSchema.index(
+  { templateId: 1, chunkIndex: 1 },
+  { unique: true },
+);
+docxTemplateChunkSchema.index({ templateType: 1, updatedAt: -1 });
+docxTemplateChunkSchema.index({ searchText: "text" });
 
 export const DocxTemplate =
   mongoose.models.DocxTemplate ||
@@ -199,6 +238,13 @@ export const DocxTemplateMemory =
   mongoose.model<IDocxTemplateMemory>(
     "DocxTemplateMemory",
     docxTemplateSchemaMemory,
+  );
+
+export const DocxTemplateChunk =
+  mongoose.models.DocxTemplateChunk ||
+  mongoose.model<IDocxTemplateChunk>(
+    "DocxTemplateChunk",
+    docxTemplateChunkSchema,
   );
 
 export const MemoryRecord =
